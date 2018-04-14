@@ -1,21 +1,18 @@
 from csv import reader
-from random import seed, shuffle
+import numpy as np
+import decision_tree
 
 TRAINING_SIZE = 0.8
 
 if __name__ == "__main__":
-    seed(1337)
+    np.random.seed(1337)
 
     with open("../data/iris_data.csv") as iris_dataset:
-        reader_obj = reader(iris_dataset, delimiter = ",")
+        reader_obj = reader(iris_dataset, delimiter=",")
 
-        dataset = [line for line in reader_obj]
+        dataset = np.array(list(reader_obj))
+        np.random.shuffle(dataset)
 
-        for row_idx in range(len(dataset)):
-            for col_idx in range(len(dataset[row_idx])):
-                # fifth col is class attribute in this dataset
-                if col_idx % 5 < 4:
-                    dataset[row_idx][col_idx] = float(dataset[row_idx][col_idx])
-
-        shuffle(dataset)
-        training_set, test_set = dataset[:int(TRAINING_SIZE * len(dataset))], dataset[int(TRAINING_SIZE * len(dataset)):]
+        # Note to self: currently all strings -> split input features and labels
+        training_set, test_set = dataset[:int(TRAINING_SIZE * np.size(dataset, axis=0)), :], \
+                                 dataset[int(TRAINING_SIZE * np.size(dataset, axis=0)):, :]
