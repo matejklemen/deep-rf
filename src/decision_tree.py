@@ -153,12 +153,13 @@ class DecisionTree:
 
         return node
 
-    def _predict_single(self, input_features, node, verbose=False):
+    """
+        Predicts single instance.
+        input_features... needs to be of an iterable data type
+        returns: single prediction
+    """
+    def _predict_single(self, input_features, node):
         if isinstance(node, LeafTreeNode):
-
-            if verbose:
-                print("[_predict_single()] Reached leaf: outcome %s" % str(node.outcome))
-
             return node.outcome
 
         curr_thresh = node.split_val
@@ -166,31 +167,24 @@ class DecisionTree:
         if node.split_attr_type == TYPE_CATEGORICAL:
 
             if input_features[node.split_attr_idx] == curr_thresh:
-                if verbose:
-                    print("[_predict_single()] [%s] == [%s]" % (str(input_features[node.split_attr_idx]), str(curr_thresh)))
-
-                return self._predict_single(input_features, node.lchild, verbose)
+                return self._predict_single(input_features, node.lchild)
             else:
-                if verbose:
-                    print("[_predict_single()] [%s] != [%s]" % (str(input_features[node.split_attr_idx]), str(curr_thresh)))
-
-                return self._predict_single(input_features, node.rchild, verbose)
+                return self._predict_single(input_features, node.rchild)
 
         else:
 
             if input_features[node.split_attr_idx] > curr_thresh:
-                if verbose:
-                    print("[_predict_single()] [%s] > [%s]" % (str(input_features[node.split_attr_idx]), str(curr_thresh)))
-
-                return self._predict_single(input_features, node.lchild, verbose)
+                return self._predict_single(input_features, node.lchild)
             else:
-                if verbose:
-                    print("[_predict_single()] [%s] <= [%s]" % (str(input_features[node.split_attr_idx]), str(curr_thresh)))
+                return self._predict_single(input_features, node.rchild)
 
-                return self._predict_single(input_features, node.rchild, verbose)
-
-    def predict(self, data, verbose=False):
-        return np.array([self._predict_single(row, self.root, verbose) for row in data])
+    """
+        Caller method for prediction of new data ('data').
+        data... needs to be of an iterable data type
+        returns: np.ndarray of predictions
+    """
+    def predict(self, data):
+        return np.array([self._predict_single(row, self.root) for row in data])
 
     # breadth-first traversal of decision tree + printing
     def _traverse(self, node):
