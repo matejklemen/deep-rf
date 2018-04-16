@@ -20,4 +20,7 @@ if __name__ == "__main__":
 
         dt = decision_tree.DecisionTree(max_depth=3)
         dt.fit(training_set_X, training_set_y)
-        dt.traverse()
+        # dt.traverse()
+        preds = dt.predict(test_set_X)
+
+        print("Accuracy: %.3f" % (np.sum(preds == test_set_y) / np.size(test_set_y)))
