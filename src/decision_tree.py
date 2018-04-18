@@ -6,6 +6,14 @@ TYPE_NUMERICAL = 1
 
 class DecisionTree:
     def __init__(self, max_depth=10, attr_types=None, label_idx_mapping=None):
+        """
+        :param max_depth:
+        :param attr_types: an iterable representing attribute types that will be passed into fit() (and predict()).
+            Most likely not needed, but the heuristic for determining attribute types may sometimes fail (if very raw
+            data is passed in).
+        :param label_idx_mapping: a dictionary containing mappings from class labels to positions in probability
+            vectors. Only relevant when return_probabilities=True in predict() method.
+        """
         self.root = None
         self.max_depth = max_depth
 
@@ -87,6 +95,14 @@ class DecisionTree:
         return (best_thresh, best_gini)
 
     def fit(self, input_train, labels_train, num_features=None):
+        """
+        :param input_train:
+        :param labels_train:
+        :param num_features: number of features that are taken into account when choosing the best attribute to split
+            the data set on. Default value num_features=None, which means that all the features will be considered.
+            If it is not None, 'num_features' features will be randomly sampled (without replacement).
+        :return: None (builds the tree in-place).
+        """
         # convert everything to numpy arrays to ease indexing and calculation
         input_train = np.array(input_train) if not isinstance(input_train, np.ndarray) else input_train
 
@@ -179,12 +195,16 @@ class DecisionTree:
 
         return node
 
-    """
-        Predicts single instance.
-        input_features... needs to be of an iterable data type
-        returns: single prediction
-    """
     def _predict_single(self, input_features, node, return_probabilities=False):
+        """
+        Predicts a single instance
+        :param input_features:
+        :param node:
+        :param return_probabilities: return probability vector instead of class label. Default value is
+            return_probabilities=False.
+        :return: class label for a single instance or (if return_probabilities=True) probability vector for single
+            instance.
+        """
         if isinstance(node, LeafTreeNode):
             return node.probabilities[0] if return_probabilities else node.outcome
 
@@ -210,29 +230,25 @@ class DecisionTree:
         returns: np.ndarray of predictions
     """
     def predict(self, data, return_probabilities=False):
+        """
+        Predict output for new data.
+        :param data:
+        :param return_probabilities: return probability vectors instead of class labels. Default value is
+            return_probabilities=False.
+        :return: class labels or (if return_probabilities=True) probability vectors for new data.
+        """
         return np.array([self._predict_single(row, self.root, return_probabilities) for row in data])
 
-    # breadth-first traversal of decision tree + printing
-    def _traverse(self, node):
-        queue = [node]
-
-        while len(queue) != 0:
-            curr_node = queue.pop(0)
-
-            if isinstance(curr_node, InternalTreeNode):
-                if curr_node.lchild:
-                    queue.append(curr_node.lchild)
-                if curr_node.rchild:
-                    queue.append(curr_node.rchild)
-            else:
-                print(curr_node)
-
-    # caller method for breadth-first traversal of tree + printing
-    def traverse(self):
-        self._traverse(self.root)
 
 class InternalTreeNode:
     def __init__(self, attr_idx, split_val, attr_type, depth):
+        """
+        :param attr_idx: index of the attribute that is used for splitting the data set in current node.
+        :param split_val: threshold value for splitting the data set.
+        :param attr_type: defines whether the attribute used in current node is categorical (TYPE_CATEGORICAL) or
+            numerical (TYPE_NUMERICAL).
+        :param depth: depth that the current node is on (might actually be redundant).
+        """
         self.split_attr_idx = attr_idx
         self.split_val = split_val
         self.split_attr_type = attr_type
