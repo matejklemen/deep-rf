@@ -8,22 +8,21 @@ class DecisionTree:
         self.root = None
         self.feature_types = np.array(attr_types) if attr_types else None
         self.max_depth = max_depth
-        self.train_X, self.train_y = None, None
 
     # a heuristic to try and determine whether variable is categorical or numerical
-    def _infer_types(self):
+    def _infer_types(self, train_X):
         self.feature_types = []
-        for idx_attr in range(np.size(self.train_X, axis=1)):
+        for idx_attr in range(np.size(train_X, axis=1)):
 
-            if isinstance(self.train_X[0, idx_attr], str):
+            if isinstance(train_X[0, idx_attr], str):
                 self.feature_types.append(TYPE_CATEGORICAL)
                 continue
 
-            if isinstance(self.train_X[0, idx_attr], float):
+            if isinstance(train_X[0, idx_attr], float):
                 self.feature_types.append(TYPE_NUMERICAL)
                 continue
 
-            if np.size(set(self.train_X[:, idx_attr])) / np.size(self.train_X) < 0.05:
+            if np.size(set(train_X[:, idx_attr])) / np.size(train_X) < 0.05:
                 self.feature_types.append(TYPE_CATEGORICAL)
                 continue
 
@@ -81,15 +80,15 @@ class DecisionTree:
 
     def fit(self, input_train, labels_train):
         # convert everything to numpy arrays to ease indexing and calculation
-        self.train_X = np.array(input_train) if not isinstance(input_train, np.ndarray) else input_train
+        input_train = np.array(input_train) if not isinstance(input_train, np.ndarray) else input_train
 
-        self.train_y = np.array(labels_train) if not isinstance(labels_train, np.ndarray) else labels_train
+        labels_train = np.array(labels_train) if not isinstance(labels_train, np.ndarray) else labels_train
 
         # using a few heuristics try to find out if attributes are categorical (discrete) or numerical (continuous)
         if not self.feature_types:
-            self._infer_types()
+            self._infer_types(input_train)
 
-        self.root = self._split_rec(self.train_X, self.train_y, 0, len(self.feature_types))
+        self.root = self._split_rec(input_train, labels_train, 0, len(self.feature_types))
 
     # recursive function for constructing the tree
     def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
