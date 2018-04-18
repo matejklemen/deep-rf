@@ -3,11 +3,14 @@ import numpy as np
 TYPE_CATEGORICAL = 0
 TYPE_NUMERICAL = 1
 
+
 class DecisionTree:
-    def __init__(self, max_depth=10, attr_types=None):
+    def __init__(self, max_depth=10, attr_types=None, label_idx_mapping=None):
         self.root = None
-        self.feature_types = np.array(attr_types) if attr_types else None
         self.max_depth = max_depth
+
+        self.label_idx_mapping = label_idx_mapping
+        self.feature_types = np.array(attr_types) if attr_types else None
 
     # a heuristic to try and determine whether variable is categorical or numerical
     def _infer_types(self, train_X):
@@ -22,6 +25,7 @@ class DecisionTree:
                 self.feature_types.append(TYPE_NUMERICAL)
                 continue
 
+            # less than 5% of all values in current column are unique values (= most likely a categorical attr.)
             if np.size(set(train_X[:, idx_attr])) / np.size(train_X, axis=0) < 0.05:
                 self.feature_types.append(TYPE_CATEGORICAL)
                 continue
@@ -30,6 +34,11 @@ class DecisionTree:
             self.feature_types.append(TYPE_NUMERICAL)
 
         self.feature_types = np.array(self.feature_types)
+
+    def _assign_labels(self, labels_train):
+        # get unique labels and map them to indices of output (prediction) vector
+        unique_labels = set(labels_train)
+        self.label_idx_mapping = dict(zip(unique_labels, range(len(unique_labels))))
 
     def _gini_impurity(self, labels):
         poss_classes = set(labels)
@@ -46,7 +55,6 @@ class DecisionTree:
         uniq_feat_vals = set(col_subset)
 
         best_gini, best_thresh = np.inf, np.inf
-        res_gini = 0
 
         if feat_type == TYPE_CATEGORICAL:
             # go over all unique values in a column containing CATEGORICAL values and check the impurity of resulting subsets
@@ -84,8 +92,12 @@ class DecisionTree:
 
         labels_train = np.array(labels_train) if not isinstance(labels_train, np.ndarray) else labels_train
 
+        # assign mapping from class label to index in probability vector
+        if self.label_idx_mapping is None:
+            self._assign_labels(labels_train)
+
         # using a few heuristics try to find out if attributes are categorical (discrete) or numerical (continuous)
-        if not self.feature_types:
+        if self.feature_types is None:
             self._infer_types(input_train)
 
         # if number of features is not specified, consider all features
@@ -99,12 +111,20 @@ class DecisionTree:
 
         # achieved pure subset
         if len(set(curr_subset_y)) == 1:
-            return LeafTreeNode({curr_subset_y[0]: 1.0}, curr_subset_y[0], curr_depth)
+            probs = np.zeros((1, len(self.label_idx_mapping)))
+            probs[0, self.label_idx_mapping[curr_subset_y[0]]] = 1.0
+
+            return LeafTreeNode(probs, curr_subset_y[0], curr_depth)
 
         # achieved max depth
         if curr_depth == self.max_depth:
             uniques, counts = np.unique(curr_subset_y, return_counts=True)
-            probs = dict(zip(uniques, counts / np.sum(counts)))
+            probs = np.zeros((1, len(self.label_idx_mapping)))
+            subset_size = np.size(curr_subset_y)
+
+            for idx_unique in range(len(uniques)):
+                probs[0, self.label_idx_mapping[uniques[idx_unique]]] = counts[idx_unique] / subset_size
+
             # value that occurs most frequently
             outcome = uniques[np.argmax(counts)]
 
@@ -132,7 +152,13 @@ class DecisionTree:
         # worse or equal subsets than before
         if best_gini_gain <= 0:
             uniques, counts = np.unique(curr_subset_y, return_counts=True)
-            probs = dict(zip(uniques, counts / np.sum(counts)))
+            probs = np.zeros((1, len(self.label_idx_mapping)))
+
+            subset_size = np.size(curr_subset_y)
+
+            for idx_unique in range(len(uniques)):
+                probs[0, self.label_idx_mapping[uniques[idx_unique]]] = counts[idx_unique] / subset_size
+
             # value that occurs most frequently
             outcome = uniques[np.argmax(counts)]
 
@@ -158,33 +184,33 @@ class DecisionTree:
         input_features... needs to be of an iterable data type
         returns: single prediction
     """
-    def _predict_single(self, input_features, node):
+    def _predict_single(self, input_features, node, return_probabilities=False):
         if isinstance(node, LeafTreeNode):
-            return node.outcome
+            return node.probabilities[0] if return_probabilities else node.outcome
 
         curr_thresh = node.split_val
 
         if node.split_attr_type == TYPE_CATEGORICAL:
 
             if input_features[node.split_attr_idx] == curr_thresh:
-                return self._predict_single(input_features, node.lchild)
+                return self._predict_single(input_features, node.lchild, return_probabilities)
             else:
-                return self._predict_single(input_features, node.rchild)
+                return self._predict_single(input_features, node.rchild, return_probabilities)
 
         else:
 
             if input_features[node.split_attr_idx] > curr_thresh:
-                return self._predict_single(input_features, node.lchild)
+                return self._predict_single(input_features, node.lchild, return_probabilities)
             else:
-                return self._predict_single(input_features, node.rchild)
+                return self._predict_single(input_features, node.rchild, return_probabilities)
 
     """
         Caller method for prediction of new data ('data').
         data... needs to be of an iterable data type
         returns: np.ndarray of predictions
     """
-    def predict(self, data):
-        return np.array([self._predict_single(row, self.root) for row in data])
+    def predict(self, data, return_probabilities=False):
+        return np.array([self._predict_single(row, self.root, return_probabilities) for row in data])
 
     # breadth-first traversal of decision tree + printing
     def _traverse(self, node):
@@ -219,7 +245,6 @@ class InternalTreeNode:
 # contains class prediction
 class LeafTreeNode:
     def __init__(self, probs, outcome, depth):
-        # {class: probability}
         self.probabilities = probs
         self.outcome = outcome
         self.depth = depth
