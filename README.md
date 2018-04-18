@@ -9,5 +9,5 @@ Sample data set used for testing is the Iris data set, obtained from [UCI machin
 
 ## Progress
 [X] Decision trees  
-[ ] Random forests  
+[X] Random forests  
 [ ] Deep random forests  
