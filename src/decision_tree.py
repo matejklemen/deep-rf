@@ -78,7 +78,7 @@ class DecisionTree:
 
         return (best_thresh, best_gini)
 
-    def fit(self, input_train, labels_train):
+    def fit(self, input_train, labels_train, num_features=None):
         # convert everything to numpy arrays to ease indexing and calculation
         input_train = np.array(input_train) if not isinstance(input_train, np.ndarray) else input_train
 
@@ -88,7 +88,11 @@ class DecisionTree:
         if not self.feature_types:
             self._infer_types(input_train)
 
-        self.root = self._split_rec(input_train, labels_train, 0, len(self.feature_types))
+        # if number of features is not specified, consider all features
+        if num_features is None:
+            num_features = len(self.feature_types)
+
+        self.root = self._split_rec(input_train, labels_train, 0, num_features)
 
     # recursive function for constructing the tree
     def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
