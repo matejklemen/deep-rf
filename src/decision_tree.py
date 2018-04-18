@@ -22,7 +22,7 @@ class DecisionTree:
                 self.feature_types.append(TYPE_NUMERICAL)
                 continue
 
-            if np.size(set(train_X[:, idx_attr])) / np.size(train_X) < 0.05:
+            if np.size(set(train_X[:, idx_attr])) / np.size(train_X, axis=0) < 0.05:
                 self.feature_types.append(TYPE_CATEGORICAL)
                 continue
 
@@ -96,16 +96,13 @@ class DecisionTree:
 
     # recursive function for constructing the tree
     def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
-        print("[_split_rec()] curr_depth: %d..." % curr_depth)
 
         # achieved pure subset
         if len(set(curr_subset_y)) == 1:
-            print("[_split_rec()] backtracking on depth %d because pure subset has been achieved (%d samples)!" % (curr_depth, np.size(curr_subset_y)))
             return LeafTreeNode({curr_subset_y[0]: 1.0}, curr_subset_y[0], curr_depth)
 
         # achieved max depth
         if curr_depth == self.max_depth:
-            print("[_split_rec()] backtracking on depth %d because max depth has been reached!" % curr_depth)
             uniques, counts = np.unique(curr_subset_y, return_counts=True)
             probs = dict(zip(uniques, counts / np.sum(counts)))
             # value that occurs most frequently
@@ -124,7 +121,6 @@ class DecisionTree:
 
         # find best attribute to split current data set on
         for idx_attr in chosen_features:
-            print("Current attribute: %d" % idx_attr)
             curr_thresh, curr_res_gini = self._gini_res(curr_subset_X[:, idx_attr], self.feature_types[idx_attr], curr_subset_y)
 
             curr_gini_gain = prior_gini - curr_res_gini
@@ -143,9 +139,6 @@ class DecisionTree:
             return LeafTreeNode(probs, outcome, curr_depth)
 
         node = InternalTreeNode(idx_best_attr, best_thresh, self.feature_types[idx_best_attr], curr_depth)
-        print("[_split_rec()] Best attr index: %d, best gini gain: %.5f, attribute type: %s"
-              % (idx_best_attr, best_gini_gain,
-                 "CATEGORICAL" if self.feature_types[idx_best_attr] == TYPE_CATEGORICAL else "NUMERICAL"))
 
         # for categorical values, we use EQ (left branch) and NEQ (right branch) to split, whereas for numerical values,
         # we use GT (left branch) and LTE (right branch) to split
