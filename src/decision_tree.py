@@ -89,10 +89,10 @@ class DecisionTree:
         if not self.feature_types:
             self._infer_types()
 
-        self.root = self._split_rec(self.train_X, self.train_y, 0)
+        self.root = self._split_rec(self.train_X, self.train_y, 0, len(self.feature_types))
 
     # recursive function for constructing the tree
-    def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth):
+    def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
         print("[_split_rec()] curr_depth: %d..." % curr_depth)
 
         # achieved pure subset
@@ -110,14 +110,18 @@ class DecisionTree:
 
             return LeafTreeNode(probs, outcome, curr_depth)
 
-
-
-        # 'idx_best_attr' is index of attribute on which the split of current dataset will be performed
+        # 'idx_best_attr' is index of attribute on which the split of current data set will be performed
         best_gini_gain, idx_best_attr, best_thresh = -np.inf, None, np.inf
         prior_gini = self._gini_impurity(curr_subset_y)
 
-        # find best attribute to split current dataset on
-        for idx_attr in range(len(self.feature_types)):
+        # if we do not want to take into account all of the features (i.e. 'num_features' < number of all attributes)
+        # randomly choose 'num_features' of them without replacement
+        chosen_features = range(num_features) if num_features == len(self.feature_types) \
+            else np.random.choice(len(self.feature_types), num_features, replace=False)
+
+        # find best attribute to split current data set on
+        for idx_attr in chosen_features:
+            print("Current attribute: %d" % idx_attr)
             curr_thresh, curr_res_gini = self._gini_res(curr_subset_X[:, idx_attr], self.feature_types[idx_attr], curr_subset_y)
 
             curr_gini_gain = prior_gini - curr_res_gini
@@ -145,11 +149,11 @@ class DecisionTree:
         mask = (curr_subset_X[:, idx_best_attr] == best_thresh) if self.feature_types[idx_best_attr] == TYPE_CATEGORICAL \
             else (curr_subset_X[:, idx_best_attr] > best_thresh)
 
-        # recursively keep splitting the dataset
-        node.lchild = self._split_rec(curr_subset_X[mask, :],
-                                      curr_subset_y[mask], curr_depth + 1)
-        node.rchild = self._split_rec(curr_subset_X[np.logical_not(mask), :],
-                                      curr_subset_y[np.logical_not(mask)], curr_depth + 1)
+        # recursively keep splitting the data set
+        node.lchild = self._split_rec(curr_subset_X[mask, :], curr_subset_y[mask],
+                                      curr_depth + 1, num_features)
+        node.rchild = self._split_rec(curr_subset_X[np.logical_not(mask), :], curr_subset_y[np.logical_not(mask)],
+                                      curr_depth + 1, num_features)
 
         return node
 
