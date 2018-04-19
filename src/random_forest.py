@@ -4,26 +4,37 @@ import numpy as np
 
 class RandomForest:
     def __init__(self, num_trees=100, max_depth=10,
-                 label_idx_mapping=None, attr_types=None):
+                 label_idx_mapping=None, attr_types=None, random_state=None):
+        """
+        :param num_trees:
+        :param max_depth:
+        :param label_idx_mapping: map from class label to index in probability vector
+        :param attr_types: an iterable representing attribute types that will be passed into fit() (and predict()).
+        Most likely not needed, but the heuristic for determining attribute types may sometimes fail (if very raw
+        data is passed in).
+        :param random_state: an integer determining the random state for random number generator.
+
+
+        (not a class param) idx_label_mapping: map from index in probability vector to class label
+        Example:
+            label_idx_mapping = {'C1': 2, 'C2': 1, 'C3': 0}
+            idx_label_mapping = {1: 'C2', 0: 'C3', 2: 'C1'}
+            Probability of class 'C1' is stored on the index 2 in probability vector,
+            'C2' on the index 1 and 'C3' on the index 2.
+        """
         self.num_trees = num_trees
         self.max_depth = max_depth
         self.trees = []
 
-        """
-            label_idx_mapping... map from class label to index in probability vector        
-            idx_label_mapping... map from index in probability vector to class label
-            Example: 
-                label_idx_mapping = {'C1': 2, 'C2': 1, 'C3': 0} 
-                idx_label_mapping = {1: 'C2', 0: 'C3', 2: 'C1'}
-                Probability of class 'C1' is stored on the index 2 in probability vector,
-                'C2' on the index 1 and 'C3' on the index 2.
-        """
         self.label_idx_mapping = label_idx_mapping
         self.idx_label_mapping = None
         if self.label_idx_mapping is not None:
             self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
         self.attr_types = attr_types
+        self.random_state = random_state
+        if self.random_state:
+            np.random.seed(self.random_state)
 
     def _assign_labels(self, labels_train):
         # get unique labels and map them to indices of output (probability) vector
@@ -51,7 +62,8 @@ class RandomForest:
             curr_input = input_train[curr_sample_indices, :]
             curr_labels = labels_train[curr_sample_indices]
 
-            curr_tree = decision_tree.DecisionTree()
+            curr_tree = decision_tree.DecisionTree(label_idx_mapping=self.label_idx_mapping,
+                                                   random_state=self.random_state)
             curr_tree.fit(curr_input, curr_labels, num_features)
 
             self.trees.append(curr_tree)

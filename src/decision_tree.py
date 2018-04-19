@@ -5,7 +5,7 @@ TYPE_NUMERICAL = 1
 
 
 class DecisionTree:
-    def __init__(self, max_depth=10, attr_types=None, label_idx_mapping=None):
+    def __init__(self, max_depth=10, attr_types=None, label_idx_mapping=None, random_state=None):
         """
         :param max_depth:
         :param attr_types: an iterable representing attribute types that will be passed into fit() (and predict()).
@@ -13,12 +13,17 @@ class DecisionTree:
             data is passed in).
         :param label_idx_mapping: a dictionary containing mappings from class labels to positions in probability
             vectors. Only relevant when return_probabilities=True in predict() method.
+        :param random_state: an integer determining the random state for random number generator.
         """
         self.root = None
         self.max_depth = max_depth
 
         self.label_idx_mapping = label_idx_mapping
         self.feature_types = np.array(attr_types) if attr_types else None
+
+        self.random_state = random_state
+        if self.random_state:
+            np.random.seed(self.random_state)
 
     # a heuristic to try and determine whether variable is categorical or numerical
     def _infer_types(self, train_X):
