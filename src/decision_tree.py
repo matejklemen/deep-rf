@@ -5,7 +5,12 @@ TYPE_NUMERICAL = 1
 
 
 class DecisionTree:
-    def __init__(self, max_depth=10, attr_types=None, label_idx_mapping=None, random_state=None):
+    def __init__(self, max_depth=10,
+                 attr_types=None,
+                 label_idx_mapping=None,
+                 random_state=None,
+                 extremely_randomized=False,
+                 max_features=None):
         """
         :param max_depth:
         :param attr_types: an iterable representing attribute types that will be passed into fit() (and predict()).
@@ -14,16 +19,26 @@ class DecisionTree:
         :param label_idx_mapping: a dictionary containing mappings from class labels to positions in probability
             vectors. Only relevant when return_probabilities=True in predict() method.
         :param random_state: an integer determining the random state for random number generator.
+        :param extremely_randomized: a boolean determining whether to build an extremely randomized decision tree
+        :param max_features: number of features that are taken into account when choosing the best attribute to split
+            the data set on. Default value max_features=None, which means that all the features will be considered.
+            If it is not None, 'max_features' features will be randomly sampled (without replacement).
         """
         self.root = None
         self.max_depth = max_depth
 
         self.label_idx_mapping = label_idx_mapping
+        if self.label_idx_mapping is not None:
+            self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
+
         self.feature_types = np.array(attr_types) if attr_types else None
 
         self.random_state = random_state
         if self.random_state:
             np.random.seed(self.random_state)
+
+        self.extremely_randomized = extremely_randomized
+        self.max_features = max_features
 
     # a heuristic to try and determine whether variable is categorical or numerical
     def _infer_types(self, train_X):
@@ -52,6 +67,8 @@ class DecisionTree:
         # get unique labels and map them to indices of output (prediction) vector
         unique_labels = set(labels_train)
         self.label_idx_mapping = dict(zip(unique_labels, range(len(unique_labels))))
+        if self.label_idx_mapping is not None:
+            self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
     def _gini_impurity(self, labels):
         poss_classes = set(labels)
@@ -64,48 +81,19 @@ class DecisionTree:
         return gimp
 
     # feat_type is an element of {TYPE_CATEGORICAL, TYPE_NUMERICAL}
-    def _gini_res(self, col_subset, feat_type, target_subset):
-        uniq_feat_vals = set(col_subset)
+    def _gini_res(self, col_subset, feat_type, target_subset, curr_thresh):
 
-        best_gini, best_thresh = np.inf, np.inf
+        # if feature is categorical, use '>' and '<=' for splitting, else use '==' and '!='
+        curr_mask = (col_subset == curr_thresh) if feat_type == TYPE_CATEGORICAL else (col_subset > curr_thresh)
+        res_gini = (np.sum(curr_mask) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[curr_mask]) + \
+                   (np.sum(np.logical_not(curr_mask)) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[np.logical_not(curr_mask)])
 
-        if feat_type == TYPE_CATEGORICAL:
-            # go over all unique values in a column containing CATEGORICAL values and check the impurity of resulting subsets
-            for uniq_val in uniq_feat_vals:
-                curr_mask = (col_subset == uniq_val)
-                # P(column == uniq_val) * gini(labels[column == uniq_val]) +
-                # P(column != uniq_val) * gini(labels[column != uniq_val])
-                res_gini = (np.sum(curr_mask) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[curr_mask]) + \
-                           (np.sum(np.logical_not(curr_mask)) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[np.logical_not(curr_mask)])
+        return res_gini
 
-                if res_gini < best_gini:
-                    best_gini = res_gini
-                    best_thresh = uniq_val
-        else:
-            # go over all unique values in a column containing NUMERICAL values and check the impurity of resulting subsets
-            # TODO: this can be optimized
-            for uniq_val in uniq_feat_vals:
-                res_gini = 0
-
-                curr_mask = (col_subset > uniq_val)
-                # P(column > uniq_val) * gini(labels[column > uniq_val]) +
-                # P(column <= uniq_val) * gini(labels[column <= uniq_val])
-                res_gini = (np.sum(curr_mask) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[curr_mask]) + \
-                           (np.sum(np.logical_not(curr_mask)) * self._gini_impurity(target_subset[np.logical_not(curr_mask)]))
-
-                if res_gini < best_gini:
-                    best_gini = res_gini
-                    best_thresh = uniq_val
-
-        return (best_thresh, best_gini)
-
-    def fit(self, input_train, labels_train, num_features=None):
-        """
+    def fit(self, input_train, labels_train):
+        """ Fit decision tree according to 'input_train' and 'labels_train'
         :param input_train:
         :param labels_train:
-        :param num_features: number of features that are taken into account when choosing the best attribute to split
-            the data set on. Default value num_features=None, which means that all the features will be considered.
-            If it is not None, 'num_features' features will be randomly sampled (without replacement).
         :return: None (builds the tree in-place).
         """
         # convert everything to numpy arrays to ease indexing and calculation
@@ -122,10 +110,10 @@ class DecisionTree:
             self._infer_types(input_train)
 
         # if number of features is not specified, consider all features
-        if num_features is None:
-            num_features = len(self.feature_types)
+        if self.max_features is None:
+            self.max_features = len(self.feature_types)
 
-        self.root = self._split_rec(input_train, labels_train, 0, num_features)
+        self.root = self._split_rec(input_train, labels_train, 0, self.max_features)
 
     # recursive function for constructing the tree
     def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
@@ -151,24 +139,43 @@ class DecisionTree:
 
             return LeafTreeNode(probs, outcome, curr_depth)
 
-        # 'idx_best_attr' is index of attribute on which the split of current data set will be performed
+        # best values for all (chosen) attributes
         best_gini_gain, idx_best_attr, best_thresh = -np.inf, None, np.inf
         prior_gini = self._gini_impurity(curr_subset_y)
 
-        # if we do not want to take into account all of the features (i.e. 'num_features' < number of all attributes)
-        # randomly choose 'num_features' of them without replacement
+        # if we do not want to take into account all of the features (i.e. 'num_features' < number of all attributes),
+        # then randomly choose 'num_features' of them without replacement
         chosen_features = range(num_features) if num_features == len(self.feature_types) \
             else np.random.choice(len(self.feature_types), num_features, replace=False)
 
         # find best attribute to split current data set on
         for idx_attr in chosen_features:
-            curr_thresh, curr_res_gini = self._gini_res(curr_subset_X[:, idx_attr], self.feature_types[idx_attr], curr_subset_y)
+            all_thresholds = np.unique(curr_subset_X[:, idx_attr])
 
-            curr_gini_gain = prior_gini - curr_res_gini
+            """
+                In extremely randomized decision trees, a random threshold value is selected for each chosen feature,
+                among which the best (according to score function, e.g. gini) threshold is selected and used for
+                splitting the data set.
+            """
+            selected_thresholds = np.random.choice(len(self.feature_types), 1, replace=False) \
+                if self.extremely_randomized else all_thresholds
+
+            # best values for current attribute
+            curr_best_res_gini, curr_best_thresh = prior_gini, None
+
+            # find best split for current attribute
+            for thresh in selected_thresholds:
+                res_gini = self._gini_res(curr_subset_X[:, idx_attr], self.feature_types[idx_attr], curr_subset_y, thresh)
+
+                if res_gini < curr_best_res_gini:
+                    curr_best_res_gini = res_gini
+                    curr_best_thresh = thresh
+
+            curr_gini_gain = prior_gini - curr_best_res_gini
             if curr_gini_gain > best_gini_gain:
                 best_gini_gain = curr_gini_gain
                 idx_best_attr = idx_attr
-                best_thresh = curr_thresh
+                best_thresh = curr_best_thresh
 
         # worse or equal subsets than before
         if best_gini_gain <= 0:
@@ -200,49 +207,48 @@ class DecisionTree:
 
         return node
 
-    def _predict_single(self, input_features, node, return_probabilities=False):
+    def _predict_single(self, input_features, node):
         """
-        Predicts a single instance
+        Predicts a single instance - returns probabilities!
         :param input_features:
         :param node:
-        :param return_probabilities: return probability vector instead of class label. Default value is
-            return_probabilities=False.
         :return: class label for a single instance or (if return_probabilities=True) probability vector for single
             instance.
         """
         if isinstance(node, LeafTreeNode):
-            return node.probabilities[0] if return_probabilities else node.outcome
+            return node.probabilities[0]
 
         curr_thresh = node.split_val
 
         if node.split_attr_type == TYPE_CATEGORICAL:
-
             if input_features[node.split_attr_idx] == curr_thresh:
-                return self._predict_single(input_features, node.lchild, return_probabilities)
+                return self._predict_single(input_features, node.lchild)
             else:
-                return self._predict_single(input_features, node.rchild, return_probabilities)
+                return self._predict_single(input_features, node.rchild)
 
         else:
-
             if input_features[node.split_attr_idx] > curr_thresh:
-                return self._predict_single(input_features, node.lchild, return_probabilities)
+                return self._predict_single(input_features, node.lchild)
             else:
-                return self._predict_single(input_features, node.rchild, return_probabilities)
+                return self._predict_single(input_features, node.rchild)
 
-    """
-        Caller method for prediction of new data ('data').
-        data... needs to be of an iterable data type
-        returns: np.ndarray of predictions
-    """
-    def predict(self, data, return_probabilities=False):
+    def predict(self, data):
         """
-        Predict output for new data.
+        Predict output for new data - returns labels.
         :param data:
-        :param return_probabilities: return probability vectors instead of class labels. Default value is
-            return_probabilities=False.
-        :return: class labels or (if return_probabilities=True) probability vectors for new data.
+        :return: class labels
         """
-        return np.array([self._predict_single(row, self.root, return_probabilities) for row in data])
+        class_idx = np.argmax(self.predict_proba(data), axis=1)
+        return np.array([self.idx_label_mapping[idx] for idx in class_idx])
+
+    def predict_proba(self, data):
+        """
+        Predict output for new data - returns probabilities for classes, whose indices are determined by
+        self.idx_label_mapping.
+        :param data:
+        :return: class probabilities
+        """
+        return np.array([self._predict_single(row, self.root) for row in data])
 
 
 class InternalTreeNode:
@@ -262,6 +268,7 @@ class InternalTreeNode:
 
     def __str__(self):
         return "[depth %d, attr %d, thresh: %3f]" % (self.depth, self.split_attr_idx, self.split_val)
+
 
 # contains class prediction
 class LeafTreeNode:
