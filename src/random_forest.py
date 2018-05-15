@@ -8,7 +8,8 @@ class RandomForest:
                  attr_types=None,
                  label_idx_mapping=None,
                  random_state=None,
-                 max_features=None):
+                 max_features=None,
+                 extremely_randomized=False):
         """
         :param num_trees:
         :param max_depth:
@@ -17,7 +18,7 @@ class RandomForest:
         Most likely not needed, but the heuristic for determining attribute types may sometimes fail (if very raw
         data is passed in).
         :param random_state: an integer determining the random state for random number generator.
-
+        :param extremely_randomized: a boolean determining whether to build a completely random forest
 
         (not a class param) idx_label_mapping: map from index in probability vector to class label
         Example:
@@ -41,6 +42,7 @@ class RandomForest:
             np.random.seed(self.random_state)
 
         self.max_features = max_features
+        self.extremely_randomized = extremely_randomized
 
     def _assign_labels(self, labels_train):
         # get unique labels and map them to indices of output (probability) vector
@@ -53,6 +55,7 @@ class RandomForest:
         if self.label_idx_mapping is None:
             self._assign_labels(labels_train)
 
+        self.trees = []
         sample_size = np.size(input_train, axis=0)
         row_indices = np.array(list(range(sample_size)))
 
@@ -70,7 +73,8 @@ class RandomForest:
 
             curr_tree = decision_tree.DecisionTree(label_idx_mapping=self.label_idx_mapping,
                                                    random_state=self.random_state,
-                                                   max_features=self.max_features)
+                                                   max_features=self.max_features,
+                                                   extremely_randomized=self.extremely_randomized)
             curr_tree.fit(curr_input, curr_labels)
 
             self.trees.append(curr_tree)
