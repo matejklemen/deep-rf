@@ -3,8 +3,12 @@ import numpy as np
 
 
 class RandomForest:
-    def __init__(self, num_trees=100, max_depth=10,
-                 label_idx_mapping=None, attr_types=None, random_state=None):
+    def __init__(self, n_estimators=100,
+                 max_depth=10,
+                 attr_types=None,
+                 label_idx_mapping=None,
+                 random_state=None,
+                 max_features=None):
         """
         :param num_trees:
         :param max_depth:
@@ -22,7 +26,7 @@ class RandomForest:
             Probability of class 'C1' is stored on the index 2 in probability vector,
             'C2' on the index 1 and 'C3' on the index 2.
         """
-        self.num_trees = num_trees
+        self.num_trees = n_estimators
         self.max_depth = max_depth
         self.trees = []
 
@@ -36,6 +40,8 @@ class RandomForest:
         if self.random_state:
             np.random.seed(self.random_state)
 
+        self.max_features = max_features
+
     def _assign_labels(self, labels_train):
         # get unique labels and map them to indices of output (probability) vector
         unique_labels = set(labels_train)
@@ -43,7 +49,7 @@ class RandomForest:
         if self.label_idx_mapping is not None:
             self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
-    def fit(self, input_train, labels_train, num_features=None):
+    def fit(self, input_train, labels_train):
         if self.label_idx_mapping is None:
             self._assign_labels(labels_train)
 
@@ -51,8 +57,8 @@ class RandomForest:
         row_indices = np.array(list(range(sample_size)))
 
         # if number of used features is not specified, default to sqrt(number of all features)
-        if num_features is None:
-            num_features = int(np.sqrt(np.size(input_train, axis=1)))
+        if self.max_features is None:
+            self.max_features = int(np.sqrt(np.size(input_train, axis=1)))
 
         for idx_tree in range(self.num_trees):
 
@@ -63,26 +69,27 @@ class RandomForest:
             curr_labels = labels_train[curr_sample_indices]
 
             curr_tree = decision_tree.DecisionTree(label_idx_mapping=self.label_idx_mapping,
-                                                   random_state=self.random_state)
-            curr_tree.fit(curr_input, curr_labels, num_features)
+                                                   random_state=self.random_state,
+                                                   max_features=self.max_features)
+            curr_tree.fit(curr_input, curr_labels)
 
             self.trees.append(curr_tree)
 
-    def predict(self, data, return_probabilities=False):
-        num_new_examples = np.size(data, axis=0)
+    def predict(self, data):
+        # turn probability vectors into a class labels
+        preds = np.argmax(self.predict_proba(data), axis=1)
+        preds = np.array([self.idx_label_mapping[idx] for idx in preds])
+
+        return preds
+
+    def predict_proba(self, data):
+        num_new_examples = data.shape[0]
         preds = np.zeros((num_new_examples, len(self.label_idx_mapping)))
 
         # average the probabilities returned by all trees in forest
         for idx_tree in range(self.num_trees):
-            preds += self.trees[idx_tree].predict(data, return_probabilities=True)
+            preds += self.trees[idx_tree].predict_proba(data)
 
         preds = np.divide(preds, self.num_trees)
-
-        if return_probabilities:
-            return preds
-
-        # turn probability vectors into a class labels
-        preds = np.argmax(preds, axis=1)
-        preds = np.array([self.idx_label_mapping[idx] for idx in preds])
 
         return preds
