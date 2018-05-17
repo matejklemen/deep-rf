@@ -31,6 +31,7 @@ class GCForest:
         # will be used to store models that make up the whole cascade
         self._cascade = None
         self._num_layers = 0
+        self._mg_scan_models = None
 
     def _assign_labels(self, labels_train):
         # get unique labels and map them to indices of output (probability) vector
@@ -93,8 +94,48 @@ class GCForest:
     def predict_proba(self, X_test):
         return self._predict(X_test, predict_probabilities=True)
 
-    def _mg_scan(self):
-        pass
+    def mg_scan(self, X, y, window_size=50, stride=1):
+        if self.label_idx_mapping is None:
+            self._assign_labels(y)
+
+        self._mg_scan_models = []
+
+        slices, labels = self._slice_data(X, y, window_size, stride)
+
+        # completely random forest
+        model, feats = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
+                                                                                          extremely_randomized=True))
+        self._mg_scan_models.append(model)
+
+        # gather up parts of representation (consecutive rows in 'feats' np.ndarray) for each example
+        transformed_feats_crf = np.reshape(feats, [X.shape[0], len(self.label_idx_mapping) * int(feats.shape[0] / X.shape[0])])
+
+        # random forest
+        model, feats = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping))
+
+        self._mg_scan_models.append(model)
+
+        transformed_feats_rf = np.reshape(feats, [X.shape[0], len(self.label_idx_mapping) * int(feats.shape[0] / X.shape[0])])
+
+        return np.concatenate((transformed_feats_crf, transformed_feats_rf), axis=1)
+
+    def _slice_data(self, X, y, window_size, stride):
+
+        sliced_X = []
+        labels = []
+
+        for idx_example in range(X.shape[0]):
+            example = X[idx_example, :]
+            print(example)
+
+            for idx in range(0, example.shape[0] - window_size + 1, stride):
+                curr_slice = example[idx: idx + window_size]
+                print(curr_slice)
+
+                sliced_X.append(curr_slice)
+                labels.append(y[idx_example])
+
+        return np.array(sliced_X), np.array(labels)
 
     def _predict(self, X_test, predict_probabilities=False):
         if self._num_layers <= 0:
@@ -188,9 +229,10 @@ class GCForest:
         return curr_layer_models, curr_layer_distributions
 
     def _get_class_distrib(self, X_train, y_train, model):
-        """ Obtains class distribution of a single random forest in a cascade layer.
+        """ Obtains class distribution of a model in a cascade layer.
         :param X_train: training data (features)
         :param y_train: training data (labels)
+        :param model:
         :return: tuple, consisting of (random_forest.RandomForest model, class distribution) where
                 class distribution has same number of rows as X_train and (#labels) columns
         """
