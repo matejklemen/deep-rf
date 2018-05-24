@@ -14,7 +14,7 @@ def train_test_split(features, labels, test_size):
 class GCForest:
     # TODO: add k_cv (for k-fold cv), add val_size (for evaluating cascade after adding new level),
     # max_cascade_layers
-    def __init__(self, nrforests_layer=4, ncrforests_layer=4, label_idx_mapping=None):
+    def __init__(self, nrforests_layer=4, ncrforests_layer=4, k_cv=10, label_idx_mapping=None):
 
         self.nrforests_layer = nrforests_layer
         self.ncrforests_layer = ncrforests_layer
@@ -24,7 +24,7 @@ class GCForest:
         if self.label_idx_mapping is not None:
             self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
-        self.k_cv = 10
+        self.k_cv = k_cv
         self.val_size = 0.2
         self.max_cascade_depth = 2
 
@@ -126,7 +126,7 @@ class GCForest:
 
         for idx_example in range(X.shape[0]):
             example = X[idx_example, :]
-            print(example)
+            # print(example)
 
             for idx in range(0, example.shape[0] - window_size + 1, stride):
                 curr_slice = example[idx: idx + window_size]
@@ -261,6 +261,10 @@ class GCForest:
         :param k: number of groups
         :return: np.array of size [1, num_examples] containing group ids ranging from 0 to k - 1.
         """
+
+        if k < num_examples:
+            raise Exception("Number of examples is lower than number of groups in k-fold CV...")
+
         limits = np.linspace(0, num_examples, k, endpoint=False)
         bins = np.digitize(np.arange(0, num_examples), limits) - 1
 
