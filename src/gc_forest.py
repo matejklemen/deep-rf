@@ -12,9 +12,26 @@ def train_test_split(features, labels, test_size):
 
 
 class GCForest:
-    # TODO: add k_cv (for k-fold cv), add val_size (for evaluating cascade after adding new level),
-    # max_cascade_layers
-    def __init__(self, window_sizes, nrforests_layer=4, ncrforests_layer=4, k_cv=10, label_idx_mapping=None):
+    def __init__(self, window_sizes,
+                 nrforests_layer=4,
+                 ncrforests_layer=4,
+                 max_cascade_depth=5,
+                 n_estimators=500,
+                 val_size=0.2,
+                 k_cv=10,
+                 label_idx_mapping=None):
+        """
+        :param window_sizes: an integer or a list of integers, representing different window sizes in multi-grained scanning
+        :param nrforests_layer: an integer, determiining the number of random forests in each layer of cascade forest
+        :param ncrforests_layer: an integer, determining the number of completely (= extremely) randomized forests
+                                in each layer of cascade forest
+        :param max_cascade_depth: an integer, determining maximum allowed depth for training cascade forest
+        :param n_estimators: number of trees in a random/completely random forest
+        :param val_size: a float in the range [0, 1], determining the relative size of validation set that is used
+                        during the training of gcForest
+        :param k_cv: an integer, determining the number of folds in k-fold cross validation
+        :param label_idx_mapping: map from class label to index in probability vector
+        """
 
         self.nrforests_layer = nrforests_layer
         self.ncrforests_layer = ncrforests_layer
@@ -26,8 +43,9 @@ class GCForest:
             self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
         self.k_cv = k_cv
-        self.val_size = 0.2
-        self.max_cascade_depth = 2
+        self.val_size = val_size
+        self.max_cascade_depth = max_cascade_depth
+        self.n_estimators = n_estimators
 
         # will be used to store models that make up the whole cascade
         self._cascade = None
@@ -120,13 +138,16 @@ class GCForest:
 
             # completely random forest
             model_crf, feats_crf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
-                                                                                                     extremely_randomized=True))
+                                                                                                      n_estimators=self.n_estimators,
+                                                                                                      extremely_randomized=True))
             # random forest
-            model_rf, feats_rf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping))
+            model_rf, feats_rf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
+                                                                                                    n_estimators=self.n_estimators))
 
             self._mg_scan_models.append(model_crf)
             self._mg_scan_models.append(model_rf)
         else:
+            # TODO: make this more general as it currently would not work for multiple window sizes
             crf_model = self._mg_scan_models[0]
             rf_model = self._mg_scan_models[1]
 
@@ -214,17 +235,6 @@ class GCForest:
         print("[_eval_cascade()] Evaluating cascade on validation data of len %d ( = number of different window sizes)" % len(X_val))
 
         preds = self._predict(X_val)
-        print(preds)
-        print(y_val)
-        print(preds == y_val)
-
-        # debug info: shape (96, )
-        print(type(preds))
-        # shape (24, ) HOW TF ARE THEY COMPARABLE THEN
-        print(type(y_val))
-        print(preds.shape)
-        print(y_val.shape)
-
         cascade_acc = np.sum(preds == y_val) / y_val.shape[0]
         print("[_eval_cascade()] Evaluated cascade and got accuracy %.3f..." % cascade_acc)
 
@@ -246,7 +256,7 @@ class GCForest:
             print("Training completely random forest number %d..." % idx_curr_forest)
             # each random forest produces a (#classes)-dimensional vector of class distribution
             rf_obj = random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
-                                                n_estimators=500,
+                                                n_estimators=self.n_estimators,
                                                 extremely_randomized=True)
             curr_rf, curr_class_distrib = self._get_class_distrib(X, y, rf_obj)
 
@@ -258,7 +268,7 @@ class GCForest:
         for idx_curr_forest in range(self.nrforests_layer):
             print("Training random forest number %d..." % idx_curr_forest)
             # each random forest produces a (#classes)-dimensional vector of class distribution
-            rf_obj = random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping, n_estimators=500)
+            rf_obj = random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping, n_estimators=self.n_estimators)
             curr_rf, curr_class_distrib = self._get_class_distrib(X, y, rf_obj)
 
             curr_layer_models.append(curr_rf)
