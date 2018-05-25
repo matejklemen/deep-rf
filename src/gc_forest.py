@@ -48,9 +48,9 @@ class GCForest:
         self.n_estimators = n_estimators
 
         # will be used to store models that make up the whole cascade
-        self._cascade = None
+        self._cascade = []
         self._num_layers = 0
-        self._mg_scan_models = None
+        self._mg_scan_models = {}
 
     def _assign_labels(self, labels_train):
         # get unique labels and map them to indices of output (probability) vector
@@ -60,8 +60,15 @@ class GCForest:
             self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
     def fit(self, X_train, y_train):
+        """ Fit gcForest to training data.
+        :param X_train: training features
+        :param y_train: training labels
+        :return: None (in-place training)
+        """
         if self.label_idx_mapping is None:
             self._assign_labels(y_train)
+
+        self._mg_scan_models = {}
 
         # transform input features for each window size
         transformed_features = [self._mg_scan(X_train, y_train, window_size=w_size) for w_size in self.window_sizes]
@@ -119,40 +126,50 @@ class GCForest:
         print("[fit()] Final verdict: num_layers = %d, best accuracy obtained: %3f..." % (self._num_layers, prev_acc))
 
     def predict(self, X_test):
+        """ Predict LABELS for test data.
+        :param X_test: training features
+        :return: np.ndarray of length (#rows of X_test)
+        """
         transformed_features = [self._mg_scan(X_test, window_size=w_size) for w_size in self.window_sizes]
         return self._predict(transformed_features, predict_probabilities=False)
 
     def predict_proba(self, X_test):
+        """ Predict PROBABILITIES for test data.
+        :param X_test: training features
+        :return: np.ndarray of shape [#rows of X_test, #labels in training data]
+        """
         transformed_features = [self._mg_scan(X_test, window_size=w_size) for w_size in self.window_sizes]
         return self._predict(transformed_features, predict_probabilities=True)
 
     def _mg_scan(self, X, y=None, window_size=50, stride=1):
+        print("[_mg_scan()] Multi-grained scanning for window size %d..." % window_size)
         if self.label_idx_mapping is None:
             self._assign_labels(y)
 
         slices, labels = self._slice_data(X, y, window_size, stride)
 
+        print("Shape of slices is...")
+        print(slices.shape)
+
         # train models on obtained slices
         if y is not None:
-            self._mg_scan_models = []
-
+            print("Training completely random forest with %d trees..." % self.n_estimators)
             # completely random forest
             model_crf, feats_crf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
                                                                                                       n_estimators=self.n_estimators,
                                                                                                       extremely_randomized=True))
+
+            print("Training random forest with %d trees..." % self.n_estimators)
             # random forest
             model_rf, feats_rf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
                                                                                                     n_estimators=self.n_estimators))
 
-            self._mg_scan_models.append(model_crf)
-            self._mg_scan_models.append(model_rf)
+            self._mg_scan_models[window_size] = [model_crf, model_rf]
         else:
-            # TODO: make this more general as it currently would not work for multiple window sizes
-            crf_model = self._mg_scan_models[0]
-            rf_model = self._mg_scan_models[1]
+            model_crf, model_rf = self._mg_scan_models[window_size]
 
-            feats_crf = crf_model.predict_proba(slices)
-            feats_rf = rf_model.predict_proba(slices)
+            feats_crf = model_crf.predict_proba(slices)
+            feats_rf = model_rf.predict_proba(slices)
 
         # gather up parts of representation (consecutive rows in feats np.ndarray) for each example
         transformed_feats_crf = np.reshape(feats_crf, [X.shape[0], len(self.label_idx_mapping) * int(feats_crf.shape[0] / X.shape[0])])
@@ -182,6 +199,13 @@ class GCForest:
         return features, labels
 
     def _predict(self, transformed_features, predict_probabilities=False):
+        """ Internal method, used for making predictions (either for making predictions for new data or evaluating current
+        structure).
+        :param transformed_features: a list, containing features, transformed with multi-grained scanning (1 entry in list
+        equals 1 window size)
+        :param predict_probabilities: determines whether the returned value will be probability vectors or label vectors
+        :return: either probability vectors or label vectors for each feature vector
+        """
         # X_test ... list of transformed feature arrays (a new feature array for each window size)
         if self._num_layers <= 0:
             raise Exception("[predict()] Number of layers is <= 0...")
@@ -226,7 +250,7 @@ class GCForest:
                 curr_input = np.hstack((transformed_features[(idx_layer + 1) % len(self.window_sizes)], new_features))
 
     def _eval_cascade(self, X_val, y_val):
-        """ Evaluates currently built cascade
+        """ Internal method, that evaluates currently built cascade.
         :param X_val: list of validation set transformed features (possibly obtained with multiple sliding window sizes)
         :param y_val: validation set labels
         :return: accuracy of cascade
@@ -241,7 +265,7 @@ class GCForest:
         return cascade_acc
 
     def _cascade_layer(self, X, y):
-        """
+        """ Internal method that builds a layer of cascade forest.
         :param X: input data (features)
         :param y: labels
         :return: (list of trained models for current layer, distribution vector for current layer)
@@ -292,6 +316,7 @@ class GCForest:
 
         # k-fold cross validation to obtain class distribution
         for idx_test_bin in range(self.k_cv):
+            print("Doing bin %d in cross validation..." % idx_test_bin)
             curr_test_mask = (bins == idx_test_bin)
             curr_train_X, curr_train_y = X_train[np.logical_not(curr_test_mask), :], y_train[np.logical_not(curr_test_mask)]
             curr_test_X, curr_test_y = X_train[curr_test_mask, :], y_train[curr_test_mask]
