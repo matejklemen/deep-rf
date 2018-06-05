@@ -1,5 +1,6 @@
 import decision_tree
 import numpy as np
+import time
 
 
 class RandomForest:
@@ -75,7 +76,11 @@ class RandomForest:
                                                    random_state=self.random_state,
                                                    max_features=self.max_features,
                                                    extremely_randomized=self.extremely_randomized)
+            _t1_debug = time.perf_counter()
             curr_tree.fit(curr_input, curr_labels)
+            _t2_debug = time.perf_counter()
+
+            print("Time spent training a single tree: %f..." % (_t2_debug - _t1_debug))
 
             self.trees.append(curr_tree)
 

@@ -1,6 +1,9 @@
 import numpy as np
 import random_forest
 
+# debug
+import time
+
 def train_test_split(features, labels, test_size):
     """
     :param data:
@@ -146,7 +149,13 @@ class GCForest:
         if self.label_idx_mapping is None:
             self._assign_labels(y)
 
+        _t1_debug = time.perf_counter()
+
         slices, labels = self._slice_data(X, y, window_size, stride)
+
+        _t2_debug = time.perf_counter()
+
+        print("Time spent slicing: %f" % (_t2_debug - _t1_debug))
 
         print("Shape of slices is...")
         print(slices.shape)
