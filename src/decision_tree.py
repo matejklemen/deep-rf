@@ -71,14 +71,8 @@ class DecisionTree:
             self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
 
     def _gini_impurity(self, labels):
-        poss_classes = set(labels)
-        # 1 - sum_{poss_classes} (p_class ^ 2)
-        gimp = 1.0
-
-        for class_ in poss_classes:
-            gimp -= (np.sum(labels == class_) / np.size(labels, axis=0)) ** 2
-
-        return gimp
+        """ Calculates gini impurity: 1 - sum_{poss_classes} (p_class ^ 2) """
+        return 1 - np.sum(np.square(np.unique(labels, return_counts=True)[1] / labels.shape[0]))
 
     # feat_type is an element of {TYPE_CATEGORICAL, TYPE_NUMERICAL}
     def _gini_res(self, col_subset, feat_type, target_subset, curr_thresh):
@@ -157,7 +151,7 @@ class DecisionTree:
                 among which the best (according to score function, e.g. gini) threshold is selected and used for
                 splitting the data set.
             """
-            selected_thresholds = np.random.choice(len(self.feature_types), 1, replace=False) \
+            selected_thresholds = np.random.choice(all_thresholds, 1) \
                 if self.extremely_randomized else all_thresholds
 
             # best values for current attribute
