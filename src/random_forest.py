@@ -10,7 +10,8 @@ class RandomForest:
                  classes_=None,
                  random_state=None,
                  max_features=None,
-                 extremely_randomized=False):
+                 extremely_randomized=False,
+                 labels_encoded=False):
         """
         :param num_trees:
         :param max_depth:
@@ -20,6 +21,7 @@ class RandomForest:
             data is passed in).
         :param random_state: an integer determining the random state for random number generator.
         :param extremely_randomized: a boolean determining whether to build a completely random forest
+        :param labels_encoded: will labels in training set already be encoded as stated in classes_?
 
         (not a class param) idx_label_mapping: map from index in probability vector to class label
         Example:
@@ -41,13 +43,23 @@ class RandomForest:
 
         self.max_features = max_features
         self.extremely_randomized = extremely_randomized
+        self.labels_encoded = labels_encoded
 
     def _assign_labels(self, labels_train):
-        self.classes_ = np.unique(labels_train)
+        if self.classes_ is None:
+            # wanted classes not provided
+            self.classes_, encoded_labels = np.unique(labels_train, return_inverse=True)
+        else:
+            encoded_labels = np.zeros_like(labels_train, np.int32)
+            for encoded_label in range(self.classes_.shape[0]):
+                encoded_labels[labels_train == self.classes_[encoded_label]] = encoded_label
+
+        return encoded_labels
 
     def fit(self, input_train, labels_train):
-        if self.classes_ is None:
-            self._assign_labels(labels_train)
+        # assign mapping from class label to index in probability vector
+        if not self.labels_encoded:
+            labels_train = self._assign_labels(labels_train)
 
         self.trees = []
         sample_size = input_train.shape[0]
@@ -68,7 +80,8 @@ class RandomForest:
             curr_tree = decision_tree.DecisionTree(classes_=self.classes_,
                                                    random_state=self.random_state,
                                                    max_features=self.max_features,
-                                                   extremely_randomized=self.extremely_randomized)
+                                                   extremely_randomized=self.extremely_randomized,
+                                                   labels_encoded=True)
             _t1_debug = time.perf_counter()
             curr_tree.fit(curr_input, curr_labels)
             _t2_debug = time.perf_counter()
