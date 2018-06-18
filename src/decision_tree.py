@@ -3,6 +3,8 @@ import numpy as np
 TYPE_CATEGORICAL = 0
 TYPE_NUMERICAL = 1
 
+_TOL = 10e-6
+
 # finds where elements of array 'first' are in array 'second'
 # warning: very expensive in terms of memory!
 # found at: https://stackoverflow.com/a/40449296
@@ -15,7 +17,8 @@ class DecisionTree:
                  classes_=None,
                  random_state=None,
                  extremely_randomized=False,
-                 max_features=None):
+                 max_features=None,
+                 labels_encoded=False):
         """
         :param max_depth:
         :param attr_types: a list/np.ndarray representing attribute types that will be passed into fit() (and predict()).
@@ -27,6 +30,7 @@ class DecisionTree:
         :param max_features: number of features that are taken into account when choosing the best attribute to split
             the data set on. Default value max_features=None, which means that all the features will be considered.
             If it is not None, 'max_features' features will be randomly sampled (without replacement).
+        :param labels_encoded: will labels in training set already be encoded as stated in classes_?
         """
         self.root = None
         self.max_depth = max_depth
@@ -40,6 +44,7 @@ class DecisionTree:
 
         self.extremely_randomized = extremely_randomized
         self.max_features = max_features
+        self.labels_encoded = labels_encoded
 
     # a heuristic to try and determine whether variable is categorical or numerical
     def _infer_types(self, train_X):
@@ -65,7 +70,15 @@ class DecisionTree:
         self.feature_types = np.array(self.feature_types)
 
     def _assign_labels(self, labels_train):
-        self.classes_ = np.unique(labels_train)
+        if self.classes_ is None:
+            # wanted classes not provided
+            self.classes_, encoded_labels = np.unique(labels_train, return_inverse=True)
+        else:
+            encoded_labels = np.zeros_like(labels_train, np.int32)
+            for encoded_label in range(self.classes_.shape[0]):
+                encoded_labels[labels_train == self.classes_[encoded_label]] = encoded_label
+
+        return encoded_labels
 
     def _gini_impurity(self, labels):
         """ Calculates gini impurity: 1 - sum_{poss_classes} (p_class ^ 2) """
@@ -101,8 +114,8 @@ class DecisionTree:
             labels_train = np.array(labels_train)
 
         # assign mapping from class label to index in probability vector
-        if self.classes_ is None:
-            self._assign_labels(labels_train)
+        if not self.labels_encoded:
+            labels_train = self._assign_labels(labels_train)
 
         # using a few heuristics try to find out if attributes are categorical (discrete) or numerical (continuous)
         if self.feature_types is None:
@@ -122,8 +135,7 @@ class DecisionTree:
             probs = np.zeros((1, self.classes_.shape[0]))
 
             # put probability at right place in our internal representation
-            idx_class = np.where(self.classes_ == curr_subset_y[0])[0][0]
-            probs[0, idx_class] = 1.0
+            probs[0, curr_subset_y[0]] = 1.0
 
             return LeafTreeNode(probs, curr_subset_y[0], curr_depth)
 
@@ -133,10 +145,7 @@ class DecisionTree:
             probs = np.zeros((1, self.classes_.shape[0]))
             subset_size = curr_subset_y.shape[0]
 
-            # need to find correct places to put probability in our internal representation
-            right_places = find_reordering(uniques, self.classes_)
-
-            probs[0, right_places] = counts / subset_size
+            probs[0, uniques] = counts / subset_size
 
             # value that occurs most frequently
             outcome = uniques[np.argmax(counts)]
@@ -176,7 +185,7 @@ class DecisionTree:
                     curr_best_thresh = thresh
 
                 # if residual gini is 0, we found best possible split (no point in searching for other splits)
-                if res_gini == 0:
+                if res_gini < 0 + _TOL:
                     break
 
             curr_gini_gain = prior_gini - curr_best_res_gini
@@ -187,20 +196,17 @@ class DecisionTree:
 
             # found attribute + threshold combination which makes a pure subset - there might be other combinations
             # as well, but the first one is good enough (and possibly speeds things up)
-            if curr_gini_gain == prior_gini:
+            if - _TOL < curr_gini_gain - prior_gini < _TOL:
                 break
 
         # worse or equal subsets than before
-        if best_gini_gain <= 0:
+        if best_gini_gain < 0 + _TOL:
             uniques, counts = np.unique(curr_subset_y, return_counts=True)
             probs = np.zeros((1, self.classes_.shape[0]))
 
             subset_size = curr_subset_y.shape[0]
 
-            # need to find correct places to put probability in our internal representation
-            right_places = find_reordering(uniques, self.classes_)
-
-            probs[0, right_places] = counts / subset_size
+            probs[0, uniques] = counts / subset_size
 
             # value that occurs most frequently
             outcome = uniques[np.argmax(counts)]
