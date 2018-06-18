@@ -3,21 +3,25 @@ import numpy as np
 TYPE_CATEGORICAL = 0
 TYPE_NUMERICAL = 1
 
+# finds where elements of array 'first' are in array 'second'
+# warning: very expensive in terms of memory!
+# found at: https://stackoverflow.com/a/40449296
+def find_reordering(first, second):
+    return np.where(second[:, None] == first[None, :])[0]
 
 class DecisionTree:
     def __init__(self, max_depth=10,
                  attr_types=None,
-                 label_idx_mapping=None,
+                 classes_=None,
                  random_state=None,
                  extremely_randomized=False,
                  max_features=None):
         """
         :param max_depth:
-        :param attr_types: an iterable representing attribute types that will be passed into fit() (and predict()).
+        :param attr_types: a list/np.ndarray representing attribute types that will be passed into fit() (and predict()).
             Most likely not needed, but the heuristic for determining attribute types may sometimes fail (if very raw
             data is passed in).
-        :param label_idx_mapping: a dictionary containing mappings from class labels to positions in probability
-            vectors. Only relevant when return_probabilities=True in predict() method.
+        :param classes_: a list/np.ndarray representing which index will represent which class in the probability vector
         :param random_state: an integer determining the random state for random number generator.
         :param extremely_randomized: a boolean determining whether to build an extremely randomized decision tree
         :param max_features: number of features that are taken into account when choosing the best attribute to split
@@ -27,10 +31,7 @@ class DecisionTree:
         self.root = None
         self.max_depth = max_depth
 
-        self.label_idx_mapping = label_idx_mapping
-        if self.label_idx_mapping is not None:
-            self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
-
+        self.classes_ = np.array(classes_) if classes_ is not None else None
         self.feature_types = np.array(attr_types) if attr_types else None
 
         self.random_state = random_state
@@ -43,7 +44,7 @@ class DecisionTree:
     # a heuristic to try and determine whether variable is categorical or numerical
     def _infer_types(self, train_X):
         self.feature_types = []
-        for idx_attr in range(np.size(train_X, axis=1)):
+        for idx_attr in range(train_X.shape[1]):
 
             if isinstance(train_X[0, idx_attr], str):
                 self.feature_types.append(TYPE_CATEGORICAL)
@@ -54,7 +55,7 @@ class DecisionTree:
                 continue
 
             # less than 5% of all values in current column are unique values (= most likely a categorical attr.)
-            if np.size(set(train_X[:, idx_attr])) / np.size(train_X, axis=0) < 0.05:
+            if np.unique(train_X[:, idx_attr]).shape[0] / train_X.shape[0] < 0.05:
                 self.feature_types.append(TYPE_CATEGORICAL)
                 continue
 
@@ -64,11 +65,7 @@ class DecisionTree:
         self.feature_types = np.array(self.feature_types)
 
     def _assign_labels(self, labels_train):
-        # get unique labels and map them to indices of output (prediction) vector
-        unique_labels = set(labels_train)
-        self.label_idx_mapping = dict(zip(unique_labels, range(len(unique_labels))))
-        if self.label_idx_mapping is not None:
-            self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
+        self.classes_ = np.unique(labels_train)
 
     def _gini_impurity(self, labels):
         """ Calculates gini impurity: 1 - sum_{poss_classes} (p_class ^ 2) """
@@ -77,10 +74,16 @@ class DecisionTree:
     # feat_type is an element of {TYPE_CATEGORICAL, TYPE_NUMERICAL}
     def _gini_res(self, col_subset, feat_type, target_subset, curr_thresh):
 
+        size_colsub = col_subset.shape[0]
+
         # if feature is categorical, use '>' and '<=' for splitting, else use '==' and '!='
         curr_mask = (col_subset == curr_thresh) if feat_type == TYPE_CATEGORICAL else (col_subset > curr_thresh)
-        res_gini = (np.sum(curr_mask) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[curr_mask]) + \
-                   (np.sum(np.logical_not(curr_mask)) / np.size(col_subset, axis=0)) * self._gini_impurity(target_subset[np.logical_not(curr_mask)])
+
+        # probability that the condition is true
+        ptrue = np.sum(curr_mask) / size_colsub
+
+        res_gini = ptrue * self._gini_impurity(target_subset[curr_mask]) + \
+                   (1 - ptrue) * self._gini_impurity(target_subset[np.logical_not(curr_mask)])
 
         return res_gini
 
@@ -91,12 +94,14 @@ class DecisionTree:
         :return: None (builds the tree in-place).
         """
         # convert everything to numpy arrays to ease indexing and calculation
-        input_train = np.array(input_train) if not isinstance(input_train, np.ndarray) else input_train
+        if not isinstance(input_train, np.ndarray):
+            input_train = np.array(input_train)
 
-        labels_train = np.array(labels_train) if not isinstance(labels_train, np.ndarray) else labels_train
+        if not isinstance(labels_train, np.ndarray):
+            labels_train = np.array(labels_train)
 
         # assign mapping from class label to index in probability vector
-        if self.label_idx_mapping is None:
+        if self.classes_ is None:
             self._assign_labels(labels_train)
 
         # using a few heuristics try to find out if attributes are categorical (discrete) or numerical (continuous)
@@ -105,7 +110,7 @@ class DecisionTree:
 
         # if number of features is not specified, consider all features
         if self.max_features is None:
-            self.max_features = len(self.feature_types)
+            self.max_features = self.feature_types.shape[0]
 
         self.root = self._split_rec(input_train, labels_train, 0, self.max_features)
 
@@ -113,20 +118,25 @@ class DecisionTree:
     def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
 
         # achieved pure subset
-        if len(set(curr_subset_y)) == 1:
-            probs = np.zeros((1, len(self.label_idx_mapping)))
-            probs[0, self.label_idx_mapping[curr_subset_y[0]]] = 1.0
+        if np.unique(curr_subset_y).shape[0] == 1:
+            probs = np.zeros((1, self.classes_.shape[0]))
+
+            # put probability at right place in our internal representation
+            idx_class = np.where(self.classes_ == curr_subset_y[0])[0][0]
+            probs[0, idx_class] = 1.0
 
             return LeafTreeNode(probs, curr_subset_y[0], curr_depth)
 
         # achieved max depth
         if curr_depth == self.max_depth:
             uniques, counts = np.unique(curr_subset_y, return_counts=True)
-            probs = np.zeros((1, len(self.label_idx_mapping)))
-            subset_size = np.size(curr_subset_y)
+            probs = np.zeros((1, self.classes_.shape[0]))
+            subset_size = curr_subset_y.shape[0]
 
-            for idx_unique in range(len(uniques)):
-                probs[0, self.label_idx_mapping[uniques[idx_unique]]] = counts[idx_unique] / subset_size
+            # need to find correct places to put probability in our internal representation
+            right_places = find_reordering(uniques, self.classes_)
+
+            probs[0, right_places] = counts / subset_size
 
             # value that occurs most frequently
             outcome = uniques[np.argmax(counts)]
@@ -139,8 +149,8 @@ class DecisionTree:
 
         # if we do not want to take into account all of the features (i.e. 'num_features' < number of all attributes),
         # then randomly choose 'num_features' of them without replacement
-        chosen_features = range(num_features) if num_features == len(self.feature_types) \
-            else np.random.choice(len(self.feature_types), num_features, replace=False)
+        chosen_features = range(num_features) if num_features == self.feature_types.shape[0] \
+            else np.random.choice(self.feature_types.shape[0], num_features, replace=False)
 
         # find best attribute to split current data set on
         for idx_attr in chosen_features:
@@ -165,21 +175,32 @@ class DecisionTree:
                     curr_best_res_gini = res_gini
                     curr_best_thresh = thresh
 
+                # if residual gini is 0, we found best possible split (no point in searching for other splits)
+                if res_gini == 0:
+                    break
+
             curr_gini_gain = prior_gini - curr_best_res_gini
             if curr_gini_gain > best_gini_gain:
                 best_gini_gain = curr_gini_gain
                 idx_best_attr = idx_attr
                 best_thresh = curr_best_thresh
 
+            # found attribute + threshold combination which makes a pure subset - there might be other combinations
+            # as well, but the first one is good enough (and possibly speeds things up)
+            if curr_gini_gain == prior_gini:
+                break
+
         # worse or equal subsets than before
         if best_gini_gain <= 0:
             uniques, counts = np.unique(curr_subset_y, return_counts=True)
-            probs = np.zeros((1, len(self.label_idx_mapping)))
+            probs = np.zeros((1, self.classes_.shape[0]))
 
-            subset_size = np.size(curr_subset_y)
+            subset_size = curr_subset_y.shape[0]
 
-            for idx_unique in range(len(uniques)):
-                probs[0, self.label_idx_mapping[uniques[idx_unique]]] = counts[idx_unique] / subset_size
+            # need to find correct places to put probability in our internal representation
+            right_places = find_reordering(uniques, self.classes_)
+
+            probs[0, right_places] = counts / subset_size
 
             # value that occurs most frequently
             outcome = uniques[np.argmax(counts)]
@@ -233,7 +254,7 @@ class DecisionTree:
         :return: class labels
         """
         class_idx = np.argmax(self.predict_proba(data), axis=1)
-        return np.array([self.idx_label_mapping[idx] for idx in class_idx])
+        return np.array([self.classes_[idx] for idx in class_idx])
 
     def predict_proba(self, data):
         """
