@@ -24,7 +24,7 @@ class GCForest:
     def __init__(self, window_sizes,
                  nrforests_layer=4,
                  ncrforests_layer=4,
-                 max_cascade_depth=5,
+                 max_cascade_depth=None,
                  n_estimators=500,
                  val_size=0.2,
                  k_cv=10,
@@ -48,7 +48,7 @@ class GCForest:
 
         self.k_cv = k_cv
         self.val_size = val_size
-        self.max_cascade_depth = max_cascade_depth
+        self.max_cascade_depth = max_cascade_depth if max_cascade_depth is not None else 2**30
         self.n_estimators = n_estimators
         self.random_state = random_state
 
@@ -164,7 +164,6 @@ class GCForest:
             print("Training completely random forest with %d trees..." % self.n_estimators)
             # completely random forest
             model_crf, feats_crf = self._get_class_distrib(slices, labels, RandomForestClassifier(n_estimators=self.n_estimators,
-                                                                                                  max_depth=100,
                                                                                                   max_features=1,
                                                                                                   random_state=self.random_state,
                                                                                                   n_jobs=-1))
@@ -172,7 +171,6 @@ class GCForest:
             print("Training random forest with %d trees..." % self.n_estimators)
             # random forest
             model_rf, feats_rf = self._get_class_distrib(slices, labels, RandomForestClassifier(n_estimators=self.n_estimators,
-                                                                                                max_depth=100,
                                                                                                 random_state=self.random_state,
                                                                                                 n_jobs=-1))
 
@@ -308,7 +306,6 @@ class GCForest:
             print("Training completely random forest number %d..." % idx_curr_forest)
             # each random forest produces a (#classes)-dimensional vector of class distribution
             rf_obj = RandomForestClassifier(n_estimators=self.n_estimators,
-                                            max_depth=100,
                                             max_features=1,
                                             random_state=self.random_state,
                                             n_jobs=-1)
@@ -324,7 +321,6 @@ class GCForest:
             print("Training random forest number %d..." % idx_curr_forest)
             # each random forest produces a (#classes)-dimensional vector of class distribution
             rf_obj = RandomForestClassifier(n_estimators=self.n_estimators,
-                                            max_depth=100,
                                             random_state=self.random_state,
                                             n_jobs=-1)
 
