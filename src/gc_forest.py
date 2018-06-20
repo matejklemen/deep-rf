@@ -1,8 +1,14 @@
 import numpy as np
-import random_forest
+from sklearn.ensemble import RandomForestClassifier
 
 # debug
 import time
+
+# finds (and returns) where elements of array 'first' are in array 'second'
+# warning: very expensive in terms of memory!
+# found at: https://stackoverflow.com/a/40449296
+def find_reordering(first, second):
+    return np.where(second[:, None] == first[None, :])[0]
 
 def train_test_split(features, labels, test_size):
     """
@@ -18,11 +24,11 @@ class GCForest:
     def __init__(self, window_sizes,
                  nrforests_layer=4,
                  ncrforests_layer=4,
-                 max_cascade_depth=5,
+                 max_cascade_depth=None,
                  n_estimators=500,
                  val_size=0.2,
                  k_cv=10,
-                 label_idx_mapping=None):
+                 random_state=None):
         """
         :param window_sizes: an integer or a list of integers, representing different window sizes in multi-grained scanning
         :param nrforests_layer: an integer, determiining the number of random forests in each layer of cascade forest
@@ -33,22 +39,18 @@ class GCForest:
         :param val_size: a float in the range [0, 1], determining the relative size of validation set that is used
                         during the training of gcForest
         :param k_cv: an integer, determining the number of folds in k-fold cross validation
-        :param label_idx_mapping: map from class label to index in probability vector
+        :param random_state: an integer determining the random state for random number generator
         """
 
         self.nrforests_layer = nrforests_layer
         self.ncrforests_layer = ncrforests_layer
         self.window_sizes = [window_sizes] if isinstance(window_sizes, int) else window_sizes
 
-        self.label_idx_mapping = label_idx_mapping
-        self.idx_label_mapping = None
-        if self.label_idx_mapping is not None:
-            self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
-
         self.k_cv = k_cv
         self.val_size = val_size
-        self.max_cascade_depth = max_cascade_depth
+        self.max_cascade_depth = max_cascade_depth if max_cascade_depth is not None else 2**30
         self.n_estimators = n_estimators
+        self.random_state = random_state
 
         # will be used to store models that make up the whole cascade
         self._cascade = []
@@ -56,11 +58,7 @@ class GCForest:
         self._mg_scan_models = {}
 
     def _assign_labels(self, labels_train):
-        # get unique labels and map them to indices of output (probability) vector
-        unique_labels = set(labels_train)
-        self.label_idx_mapping = dict(zip(unique_labels, range(len(unique_labels))))
-        if self.label_idx_mapping is not None:
-            self.idx_label_mapping = {self.label_idx_mapping[label]: label for label in self.label_idx_mapping}
+        self.classes_ = np.unique(labels_train)
 
     def fit(self, X_train, y_train):
         """ Fit gcForest to training data.
@@ -68,8 +66,9 @@ class GCForest:
         :param y_train: training labels
         :return: None (in-place training)
         """
-        if self.label_idx_mapping is None:
-            self._assign_labels(y_train)
+
+        # map classes to indices in probability vector
+        self._assign_labels(y_train)
 
         self._mg_scan_models = {}
 
@@ -99,7 +98,7 @@ class GCForest:
             print("[fit()] Shape of new features: ")
             print(new_features.shape)
 
-            # extract validation sets for each window size
+            # extract validation sets for each window size - TODO: why exactly is this in a loop?
             transformed_val_X = [quad[2] for quad in split_transformed_features]
 
             # check performance of cascade on validation set
@@ -146,8 +145,8 @@ class GCForest:
 
     def _mg_scan(self, X, y=None, window_size=50, stride=1):
         print("[_mg_scan()] Multi-grained scanning for window size %d..." % window_size)
-        if self.label_idx_mapping is None:
-            self._assign_labels(y)
+        # if self.classes_ is None:
+        #     self._assign_labels(y)
 
         _t1_debug = time.perf_counter()
 
@@ -164,25 +163,35 @@ class GCForest:
         if y is not None:
             print("Training completely random forest with %d trees..." % self.n_estimators)
             # completely random forest
-            model_crf, feats_crf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
-                                                                                                      n_estimators=self.n_estimators,
-                                                                                                      extremely_randomized=True))
+            model_crf, feats_crf = self._get_class_distrib(slices, labels, RandomForestClassifier(n_estimators=self.n_estimators,
+                                                                                                  max_features=1,
+                                                                                                  random_state=self.random_state,
+                                                                                                  n_jobs=-1))
 
             print("Training random forest with %d trees..." % self.n_estimators)
             # random forest
-            model_rf, feats_rf = self._get_class_distrib(slices, labels, random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
-                                                                                                    n_estimators=self.n_estimators))
+            model_rf, feats_rf = self._get_class_distrib(slices, labels, RandomForestClassifier(n_estimators=self.n_estimators,
+                                                                                                random_state=self.random_state,
+                                                                                                n_jobs=-1))
 
             self._mg_scan_models[window_size] = [model_crf, model_rf]
         else:
             model_crf, model_rf = self._mg_scan_models[window_size]
 
-            feats_crf = model_crf.predict_proba(slices)
-            feats_rf = model_rf.predict_proba(slices)
+            feats_crf = np.zeros((slices.shape[0], self.classes_.shape[0]), dtype=np.float32)
+            feats_rf = np.zeros((slices.shape[0], self.classes_.shape[0]), dtype=np.float32)
+
+            # reorder features to set order (self.classes_) because they might not be placed the same in sklearn's
+            # classifier (an example where this might happen is when some label is not present in training set) for
+            # a model (reordering is the same for both models because they were trained on same data)
+            right_order = find_reordering(model_crf.classes_, self.classes_)
+
+            feats_crf[:, right_order] = model_crf.predict_proba(slices)
+            feats_rf[:, right_order] = model_rf.predict_proba(slices)
 
         # gather up parts of representation (consecutive rows in feats np.ndarray) for each example
-        transformed_feats_crf = np.reshape(feats_crf, [X.shape[0], len(self.label_idx_mapping) * int(feats_crf.shape[0] / X.shape[0])])
-        transformed_feats_rf = np.reshape(feats_rf, [X.shape[0], len(self.label_idx_mapping) * int(feats_rf.shape[0] / X.shape[0])])
+        transformed_feats_crf = np.reshape(feats_crf, [X.shape[0], self.classes_.shape[0] * int(feats_crf.shape[0] / X.shape[0])])
+        transformed_feats_rf = np.reshape(feats_rf, [X.shape[0], self.classes_.shape[0] * int(feats_rf.shape[0] / X.shape[0])])
 
         return np.concatenate((transformed_feats_crf, transformed_feats_rf), axis=1)
 
@@ -219,7 +228,7 @@ class GCForest:
         if self._num_layers <= 0:
             raise Exception("[predict()] Number of layers is <= 0...")
 
-        num_labels = len(self.label_idx_mapping)
+        num_labels = self.classes_.shape[0]
         curr_input = transformed_features[0]
 
         for idx_layer in range(self._num_layers):
@@ -227,9 +236,17 @@ class GCForest:
             curr_layer_models = self._cascade[idx_layer]
 
             new_features = np.zeros((curr_input.shape[0], (self.ncrforests_layer + self.nrforests_layer) * num_labels))
+
             for idx_model in range(len(curr_layer_models)):
-                new_features[:, idx_model * num_labels: (idx_model + 1) * num_labels] += \
-                    curr_layer_models[idx_model].predict_proba(curr_input)
+                # reorder features to set order (self.classes_) because they might not be placed the same in sklearn's
+                # classifier (an example where this might happen is when some label is not present in training set) for
+                # a model (reordering is the same for both models because they were trained on same data)
+                tmp = new_features[:, idx_model * num_labels: (idx_model + 1) * num_labels]
+                right_order = find_reordering(curr_layer_models[idx_model].classes_, self.classes_)
+                tmp[:, right_order] += curr_layer_models[idx_model].predict_proba(curr_input)
+
+                new_features[:, idx_model * num_labels: (idx_model + 1) * num_labels] = tmp
+
 
             # last layer: get class distributions (normal procedure) and average them to obtain final distribution
             if idx_layer == self._num_layers - 1:
@@ -250,7 +267,7 @@ class GCForest:
                     label_indices = np.argmax(final_probs, axis=1)
                     print("Vector of label indices has a shape of...")
                     print(label_indices.shape)
-                    preds = [self.idx_label_mapping[idx] for idx in label_indices]
+                    preds = [self.classes_[idx] for idx in label_indices]
                     return np.array(preds)
 
             # all but the last layer: get the input concatenated with obtained class distribution vectors
@@ -280,7 +297,7 @@ class GCForest:
         :return: (list of trained models for current layer, distribution vector for current layer)
         """
 
-        num_labels = len(self.label_idx_mapping)
+        num_labels = self.classes_.shape[0]
         curr_layer_models = []
         curr_layer_distributions = np.zeros((X.shape[0], (self.ncrforests_layer + self.nrforests_layer) * num_labels))
 
@@ -288,9 +305,11 @@ class GCForest:
         for idx_curr_forest in range(self.ncrforests_layer):
             print("Training completely random forest number %d..." % idx_curr_forest)
             # each random forest produces a (#classes)-dimensional vector of class distribution
-            rf_obj = random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping,
-                                                n_estimators=self.n_estimators,
-                                                extremely_randomized=True)
+            rf_obj = RandomForestClassifier(n_estimators=self.n_estimators,
+                                            max_features=1,
+                                            random_state=self.random_state,
+                                            n_jobs=-1)
+
             curr_rf, curr_class_distrib = self._get_class_distrib(X, y, rf_obj)
 
             curr_layer_models.append(curr_rf)
@@ -301,13 +320,15 @@ class GCForest:
         for idx_curr_forest in range(self.nrforests_layer):
             print("Training random forest number %d..." % idx_curr_forest)
             # each random forest produces a (#classes)-dimensional vector of class distribution
-            rf_obj = random_forest.RandomForest(label_idx_mapping=self.label_idx_mapping, n_estimators=self.n_estimators)
+            rf_obj = RandomForestClassifier(n_estimators=self.n_estimators,
+                                            random_state=self.random_state,
+                                            n_jobs=-1)
+
             curr_rf, curr_class_distrib = self._get_class_distrib(X, y, rf_obj)
 
             curr_layer_models.append(curr_rf)
             curr_layer_distributions[:, (self.ncrforests_layer + idx_curr_forest) * num_labels:
-                                        (self.ncrforests_layer + idx_curr_forest + 1) * num_labels] += \
-                curr_class_distrib
+                                        (self.ncrforests_layer + idx_curr_forest + 1) * num_labels] += curr_class_distrib
 
         return curr_layer_models, curr_layer_distributions
 
@@ -321,7 +342,7 @@ class GCForest:
         """
 
         bins = self._kfold_cv(X_train.shape[0], self.k_cv)
-        class_distrib = np.zeros((X_train.shape[0], len(self.label_idx_mapping)))
+        class_distrib = np.zeros((X_train.shape[0], self.classes_.shape[0]))
 
         # k-fold cross validation to obtain class distribution
         for idx_test_bin in range(self.k_cv):
@@ -331,8 +352,16 @@ class GCForest:
             curr_test_X, curr_test_y = X_train[curr_test_mask, :], y_train[curr_test_mask]
 
             model.fit(curr_train_X, curr_train_y)
-            # careful about vector index - label relationship (certain index should represent same label in all cases)
-            class_distrib[curr_test_mask, :] += model.predict_proba(curr_test_X)
+
+            # there might come a situation where a model does not get trained on a set which contains all classes in
+            # self.classes_, in that case we need to be careful to add probabilities on right places
+            right_places = find_reordering(model.classes_, self.classes_)
+
+            # can't seem to make these arrays get broadcasted to right shapes so doing it in 2 steps
+            tmp = class_distrib[curr_test_mask, :]
+            tmp[:, right_places] += model.predict_proba(curr_test_X)
+
+            class_distrib[curr_test_mask, :] = tmp
 
         # train a RF model on whole training set, will be placed in cascade
         model.fit(X_train, y_train)
