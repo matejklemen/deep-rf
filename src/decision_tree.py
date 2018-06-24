@@ -38,8 +38,9 @@ class DecisionTree:
         self.classes_ = np.array(classes_) if classes_ is not None else None
         self.feature_types = np.array(attr_types) if attr_types else None
 
+        # TODO: not working as intended -> this random seed gets reset after every invocation of random method
         self.random_state = random_state
-        if self.random_state:
+        if self.random_state is not None:
             np.random.seed(self.random_state)
 
         self.extremely_randomized = extremely_randomized
@@ -80,25 +81,92 @@ class DecisionTree:
 
         return encoded_labels
 
-    def _gini_impurity(self, labels):
-        """ Calculates gini impurity: 1 - sum_{poss_classes} (p_class ^ 2) """
-        return 1 - np.sum(np.square(np.unique(labels, return_counts=True)[1] / labels.shape[0]))
+    def _gini(self, class_dist, num_el):
+        """ Calculates gini impurity: 1 - sum_{poss_classes} (p_class ^ 2).
 
-    # feat_type is an element of {TYPE_CATEGORICAL, TYPE_NUMERICAL}
-    def _gini_res(self, col_subset, feat_type, target_subset, curr_thresh):
+        Parameters
+        ----------
+        :param class_dist: vector with number of instances that belong to each class
+        :param num_el: number of all elements in 'class_dist'
+        :return: gini index
+        """
+        return 1 - np.sum(np.square(np.divide(class_dist, num_el)))
 
-        size_colsub = col_subset.shape[0]
+    def _res_gini(self, feat, target, sorted_thresholds, feat_type):
+        """ Calculates best (lowest) residual gini for thresholds 'sorted_thresholds' on data (sub)set 'feat'.
 
-        # if feature is categorical, use '>' and '<=' for splitting, else use '==' and '!='
-        curr_mask = (col_subset == curr_thresh) if feat_type == TYPE_CATEGORICAL else (col_subset > curr_thresh)
+        Parameters
+        ----------
+        :param feat: values of a single attribute for entire (sub)set
+        :param target: target values corresponding to 'feat'
+        :param sorted_thresholds: thresh
+        :param feat_type: type of attribute that is being checked. One of {TYPE_CATEGORICAL, TYPE_NUMERICAL}
+        :return: tuple, containing lowest residual gini (index [0]) and index, corresponding to threshold that produces
+        lowest residual gini (index [1])
+        """
+        # how are examples distributed among classes prior to checking splits
+        _, target, class_dist = np.unique(target, return_counts=True, return_inverse=True)
 
-        # probability that the condition is true
-        ptrue = np.sum(curr_mask) / size_colsub
+        if feat_type == TYPE_CATEGORICAL:
+            # encode features and thresholds as ints
+            encoding, feat = np.unique(feat, return_inverse=True)
+            sorted_thresholds = np.arange(encoding.shape[0])
+            comparison_op = np.equal
+        else:
+            comparison_op = np.less
 
-        res_gini = ptrue * self._gini_impurity(target_subset[curr_mask]) + \
-                   (1 - ptrue) * self._gini_impurity(target_subset[np.logical_not(curr_mask)])
+        # sort examples (and corresponding labels) by attribute values (i.e. by thresholds)
+        sort_indices = np.argsort(feat)
+        sorted_feats = feat[sort_indices]
+        sorted_target = target[sort_indices]
 
-        return res_gini
+        uniq_thresh = sorted_thresholds
+
+        idx_thresh, idx_example = 0, 0
+        num_examples = sorted_feats.shape[0]
+
+        """ Distribution of elements LT/GTE current threshold (numerical attributes) or
+        EQ/NEQ (categorical attributes). """
+        left, left_count = np.zeros_like(class_dist), 0
+        right, right_count = np.copy(class_dist), num_examples
+
+        best_gini, idx_best_thresh = 1, 0
+
+        while idx_example < num_examples and idx_thresh < uniq_thresh.shape[0]:
+            curr_val = sorted_feats[idx_example]
+
+            if comparison_op(curr_val, uniq_thresh[idx_thresh]):
+                left[sorted_target[idx_example]] += 1
+                right[sorted_target[idx_example]] -= 1
+
+                left_count += 1
+                right_count -= 1
+
+                idx_example += 1
+            else:
+                left_prob = (left_count / num_examples)
+
+                # calculate gini for curr threshold
+                curr_gini_res = left_prob * self._gini(left, left_count) + (1 - left_prob) * self._gini(right, right_count)
+
+                if curr_gini_res < 10e-6:
+                    # print("Found CLEAN subset! Ending...")
+                    best_gini, idx_best_thresh = curr_gini_res, idx_thresh
+                    break
+
+                if curr_gini_res < best_gini:
+                    # print("Found new best residual gini: %.2f..." % curr_gini_res)
+                    best_gini, idx_best_thresh = curr_gini_res, idx_thresh
+
+                if feat_type == TYPE_CATEGORICAL:
+                    # in case of categorical values count vectors need to be reset to 0 and original distribution
+                    left, left_count = np.zeros_like(class_dist), 0
+                    right, right_count = np.copy(class_dist), num_examples
+
+                # go onto next threshold
+                idx_thresh += 1
+
+        return best_gini, idx_best_thresh
 
     def fit(self, input_train, labels_train):
         """ Fit decision tree according to 'input_train' and 'labels_train'
@@ -130,8 +198,10 @@ class DecisionTree:
     # recursive function for constructing the tree
     def _split_rec(self, curr_subset_X, curr_subset_y, curr_depth, num_features):
 
+        uniques_y, counts_y = np.unique(curr_subset_y, return_counts=True)
+
         # achieved pure subset
-        if np.unique(curr_subset_y).shape[0] == 1:
+        if uniques_y.shape[0] == 1:
             probs = np.zeros((1, self.classes_.shape[0]))
 
             # put probability at right place in our internal representation
@@ -141,24 +211,24 @@ class DecisionTree:
 
         # achieved max depth
         if curr_depth == self.max_depth:
-            uniques, counts = np.unique(curr_subset_y, return_counts=True)
             probs = np.zeros((1, self.classes_.shape[0]))
             subset_size = curr_subset_y.shape[0]
 
-            probs[0, uniques] = counts / subset_size
+            probs[0, uniques_y] = counts_y / subset_size
 
             # value that occurs most frequently
-            outcome = uniques[np.argmax(counts)]
+            outcome = uniques_y[np.argmax(counts_y)]
 
             return LeafTreeNode(probs, outcome, curr_depth)
 
         # best values for all (chosen) attributes
         best_gini_gain, idx_best_attr, best_thresh = -np.inf, None, np.inf
-        prior_gini = self._gini_impurity(curr_subset_y)
+
+        prior_gini = self._gini(counts_y, curr_subset_y.shape[0])
 
         # if we do not want to take into account all of the features (i.e. 'num_features' < number of all attributes),
         # then randomly choose 'num_features' of them without replacement
-        chosen_features = range(num_features) if num_features == self.feature_types.shape[0] \
+        chosen_features = np.arange(num_features) if num_features == self.feature_types.shape[0] \
             else np.random.choice(self.feature_types.shape[0], num_features, replace=False)
 
         # find best attribute to split current data set on
@@ -174,19 +244,9 @@ class DecisionTree:
                 if self.extremely_randomized else all_thresholds
 
             # best values for current attribute
-            curr_best_res_gini, curr_best_thresh = prior_gini, None
-
-            # find best split for current attribute
-            for thresh in selected_thresholds:
-                res_gini = self._gini_res(curr_subset_X[:, idx_attr], self.feature_types[idx_attr], curr_subset_y, thresh)
-
-                if res_gini < curr_best_res_gini:
-                    curr_best_res_gini = res_gini
-                    curr_best_thresh = thresh
-
-                # if residual gini is 0, we found best possible split (no point in searching for other splits)
-                if res_gini < 0 + _TOL:
-                    break
+            curr_best_res_gini, idx_curr_best_thresh = self._res_gini(curr_subset_X[:, idx_attr], curr_subset_y,
+                                                                      selected_thresholds, self.feature_types[idx_attr])
+            curr_best_thresh = selected_thresholds[idx_curr_best_thresh]
 
             curr_gini_gain = prior_gini - curr_best_res_gini
             if curr_gini_gain > best_gini_gain:
@@ -201,24 +261,24 @@ class DecisionTree:
 
         # worse or equal subsets than before
         if best_gini_gain < 0 + _TOL:
-            uniques, counts = np.unique(curr_subset_y, return_counts=True)
+            # uniques, counts = np.unique(curr_subset_y, return_counts=True)
             probs = np.zeros((1, self.classes_.shape[0]))
 
             subset_size = curr_subset_y.shape[0]
 
-            probs[0, uniques] = counts / subset_size
+            probs[0, uniques_y] = counts_y / subset_size
 
             # value that occurs most frequently
-            outcome = uniques[np.argmax(counts)]
+            outcome = uniques_y[np.argmax(counts_y)]
 
             return LeafTreeNode(probs, outcome, curr_depth)
 
         node = InternalTreeNode(idx_best_attr, best_thresh, self.feature_types[idx_best_attr], curr_depth)
 
         # for categorical values, we use EQ (left branch) and NEQ (right branch) to split, whereas for numerical values,
-        # we use GT (left branch) and LTE (right branch) to split
+        # we use LT (left branch) and GE (right branch) to split
         mask = (curr_subset_X[:, idx_best_attr] == best_thresh) if self.feature_types[idx_best_attr] == TYPE_CATEGORICAL \
-            else (curr_subset_X[:, idx_best_attr] > best_thresh)
+            else (curr_subset_X[:, idx_best_attr] < best_thresh)
 
         # recursively keep splitting the data set
         node.lchild = self._split_rec(curr_subset_X[mask, :], curr_subset_y[mask],
@@ -233,8 +293,7 @@ class DecisionTree:
         Predicts a single instance - returns probabilities!
         :param input_features:
         :param node:
-        :return: class label for a single instance or (if return_probabilities=True) probability vector for single
-            instance.
+        :return: probability vector for single instance
         """
         if isinstance(node, LeafTreeNode):
             return node.probabilities[0]
@@ -248,7 +307,7 @@ class DecisionTree:
                 return self._predict_single(input_features, node.rchild)
 
         else:
-            if input_features[node.split_attr_idx] > curr_thresh:
+            if input_features[node.split_attr_idx] < curr_thresh:
                 return self._predict_single(input_features, node.lchild)
             else:
                 return self._predict_single(input_features, node.rchild)
@@ -265,7 +324,7 @@ class DecisionTree:
     def predict_proba(self, data):
         """
         Predict output for new data - returns probabilities for classes, whose indices are determined by
-        self.idx_label_mapping.
+        self.classes_.
         :param data:
         :return: class probabilities
         """
