@@ -13,7 +13,9 @@ class RandomForest:
                  extremely_randomized=False,
                  labels_encoded=False):
         """
-        :param num_trees:
+        Parameters
+        ----------
+        :param n_estimators:
         :param max_depth:
         :param classes_: a list/np.ndarray representing which index will represent which class in the probability vector
         :param attr_types: a list/np.ndarray representing attribute types that will be passed into fit() (and predict()).
@@ -22,13 +24,6 @@ class RandomForest:
         :param random_state: an integer determining the random state for random number generator.
         :param extremely_randomized: a boolean determining whether to build a completely random forest
         :param labels_encoded: will labels in training set already be encoded as stated in classes_?
-
-        (not a class param) idx_label_mapping: map from index in probability vector to class label
-        Example:
-            label_idx_mapping = {'C1': 2, 'C2': 1, 'C3': 0}
-            idx_label_mapping = {1: 'C2', 0: 'C3', 2: 'C1'}
-            Probability of class 'C1' is stored on the index 2 in probability vector,
-            'C2' on the index 1 and 'C3' on the index 2.
         """
         self.num_trees = n_estimators
         self.max_depth = max_depth
@@ -38,8 +33,6 @@ class RandomForest:
 
         self.attr_types = attr_types
         self.random_state = random_state
-        if self.random_state:
-            np.random.seed(self.random_state)
 
         self.max_features = max_features
         self.extremely_randomized = extremely_randomized
@@ -63,14 +56,14 @@ class RandomForest:
 
         self.trees = []
         sample_size = input_train.shape[0]
-        row_indices = np.array(list(range(sample_size)))
+        row_indices = np.arange(sample_size)
 
         # if number of used features is not specified, default to sqrt(number of all features)
         if self.max_features is None:
             self.max_features = int(np.sqrt(input_train.shape[1]))
 
         for idx_tree in range(self.num_trees):
-
+            np.random.seed(self.random_state)
             # choose sample for current tree (random with replacement)
             curr_sample_indices = np.random.choice(row_indices, sample_size)
 
@@ -89,6 +82,7 @@ class RandomForest:
             print("Time spent training a single tree: %f..." % (_t2_debug - _t1_debug))
 
             self.trees.append(curr_tree)
+            self.random_state += 1
 
     def predict(self, data):
         # turn probability vectors into a class labels

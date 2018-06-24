@@ -38,7 +38,6 @@ class DecisionTree:
         self.classes_ = np.array(classes_) if classes_ is not None else None
         self.feature_types = np.array(attr_types) if attr_types else None
 
-        # TODO: not working as intended -> this random seed gets reset after every invocation of random method
         self.random_state = random_state
         if self.random_state is not None:
             np.random.seed(self.random_state)
