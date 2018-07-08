@@ -7,7 +7,6 @@ _TOL = 10e-6
 
 # finds where elements of array 'first' are in array 'second'
 # warning: very expensive in terms of memory!
-# found at: https://stackoverflow.com/a/40449296
 def find_reordering(first, second):
     return np.where(second[:, None] == first[None, :])[0]
 
@@ -38,9 +37,8 @@ class DecisionTree:
         self.classes_ = np.array(classes_) if classes_ is not None else None
         self.feature_types = np.array(attr_types) if attr_types else None
 
-        self.random_state = random_state
-        if self.random_state is not None:
-            np.random.seed(self.random_state)
+        if random_state is not None:
+            np.random.seed(random_state)
 
         self.extremely_randomized = extremely_randomized
         self.max_features = max_features
@@ -85,9 +83,12 @@ class DecisionTree:
 
         Parameters
         ----------
-        :param class_dist: vector with number of instances that belong to each class
-        :param num_el: number of all elements in 'class_dist'
-        :return: gini index
+        :param class_dist: numpy.ndarray
+                Vector with number of instances that belong to each class.
+        :param num_el: int
+                Number of all elements in 'class_dist'.
+        :return: float
+                Gini index.
         """
         return 1 - np.sum(np.square(np.divide(class_dist, num_el)))
 
@@ -96,12 +97,17 @@ class DecisionTree:
 
         Parameters
         ----------
-        :param feat: values of a single attribute for entire (sub)set
-        :param target: target values corresponding to 'feat'
-        :param sorted_thresholds: thresh
-        :param feat_type: type of attribute that is being checked. One of {TYPE_CATEGORICAL, TYPE_NUMERICAL}
-        :return: tuple, containing lowest residual gini (index [0]) and index, corresponding to threshold that produces
-        lowest residual gini (index [1])
+        :param feat: numpy.ndarray of shape [n_rows, 1]
+                Values of a single attribute for entire (sub)set.
+        :param target: numpy.ndarray of shape [n_rows, 1]
+                Target values corresponding to 'feat'.
+        :param sorted_thresholds: numpy.ndarray
+                Possible thresholds for current feature - method assumes these are sorted!
+        :param feat_type: int (one of TYPE_CATEGORICAL or TYPE_NUMERICAL)
+                Type of attribute that is being checked.
+        :return: tuple
+                Contains lowest residual gini (index [0]) and index, corresponding to threshold that produces
+                lowest residual gini (index [1]).
         """
         # how are examples distributed among classes prior to checking splits
         _, target, class_dist = np.unique(target, return_counts=True, return_inverse=True)
@@ -242,6 +248,8 @@ class DecisionTree:
             selected_thresholds = np.random.choice(all_thresholds, 1) \
                 if self.extremely_randomized else all_thresholds
 
+            print("There are %d selected thresholds and feature type is %s..." %
+                  (selected_thresholds.shape[0], "categorical" if self.feature_types[idx_attr] == TYPE_CATEGORICAL else "numerical"))
             # best values for current attribute
             curr_best_res_gini, idx_curr_best_thresh = self._res_gini(curr_subset_X[:, idx_attr], curr_subset_y,
                                                                       selected_thresholds, self.feature_types[idx_attr])

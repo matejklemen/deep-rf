@@ -15,15 +15,24 @@ class RandomForest:
         """
         Parameters
         ----------
-        :param n_estimators:
-        :param max_depth:
-        :param classes_: a list/np.ndarray representing which index will represent which class in the probability vector
-        :param attr_types: a list/np.ndarray representing attribute types that will be passed into fit() (and predict()).
-            Most likely not needed, but the heuristic for determining attribute types may sometimes fail (if very raw
-            data is passed in).
-        :param random_state: an integer determining the random state for random number generator.
-        :param extremely_randomized: a boolean determining whether to build a completely random forest
-        :param labels_encoded: will labels in training set already be encoded as stated in classes_?
+        :param n_estimators: int
+                Number of trees in forest.
+        :param max_depth: int
+                Max depth for trees, grown in the forest.
+        :param attr_types: list or numpy.ndarray (default: None)
+                Attribute types that will be passed into fit() (and predict()).
+                Likely not needed, but the heuristic for determining attribute types may sometimes fail (if very raw
+                data is passed in).
+        :param classes_: list or numpy.ndarray (default: None)
+                Mapping between classes and indices in the probability vectors.
+        :param random_state: int (default: None)
+                The random state for random number generator.
+        :param max_features: int
+                Number of randomly selected features.
+        :param extremely_randomized: bool
+                Flag, specifying whether to build a completely random forest.
+        :param labels_encoded: bool
+                Will labels in training set already be encoded as stated in 'classes_'?
         """
         self.num_trees = n_estimators
         self.max_depth = max_depth
@@ -32,7 +41,8 @@ class RandomForest:
         self.classes_ = np.array(classes_) if classes_ is not None else None
 
         self.attr_types = attr_types
-        self.random_state = random_state
+        if random_state is not None:
+            np.random.seed(random_state)
 
         self.max_features = max_features
         self.extremely_randomized = extremely_randomized
@@ -63,7 +73,6 @@ class RandomForest:
             self.max_features = int(np.sqrt(input_train.shape[1]))
 
         for idx_tree in range(self.num_trees):
-            np.random.seed(self.random_state)
             # choose sample for current tree (random with replacement)
             curr_sample_indices = np.random.choice(row_indices, sample_size)
 
@@ -71,7 +80,7 @@ class RandomForest:
             curr_labels = labels_train[curr_sample_indices]
 
             curr_tree = decision_tree.DecisionTree(classes_=self.classes_,
-                                                   random_state=self.random_state,
+                                                   random_state=None,
                                                    max_features=self.max_features,
                                                    extremely_randomized=self.extremely_randomized,
                                                    labels_encoded=True)
@@ -82,7 +91,6 @@ class RandomForest:
             print("Time spent training a single tree: %f..." % (_t2_debug - _t1_debug))
 
             self.trees.append(curr_tree)
-            self.random_state += 1
 
     def predict(self, data):
         # turn probability vectors into a class labels

@@ -1,5 +1,8 @@
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+from mg_scanning import *
+from cascade_forest import *
+from sklearn.model_selection import train_test_split
+
 
 # debug
 import time
@@ -10,405 +13,203 @@ import time
 def find_reordering(first, second):
     return np.where(second[:, None] == first[None, :])[0]
 
-def train_test_split(features, labels, test_size):
-    """
-    :param data:
-    :param test_size: float between 0 and 1
-    :return: (features_train, labels_train, features_test, labels_test)
-    """
-    return (features[:int((1 - test_size) * features.shape[0]), :], labels[:int((1 - test_size) * features.shape[0])],
-            features[int((1 - test_size) * features.shape[0]):, :], labels[int((1 - test_size) * features.shape[0]):])
 
-
-class GCForest:
-    def __init__(self, window_sizes=None,
-                 nrforests_layer=4,
-                 ncrforests_layer=4,
-                 max_cascade_depth=None,
-                 n_estimators=500,
+class GrainedCascadeForest:
+    def __init__(self, single_shape=None,
+                 n_rf_grain=1,
+                 n_crf_grain=1,
+                 n_rf_cascade=2,
+                 n_crf_cascade=2,
+                 window_sizes=None,
+                 strides=None,
+                 n_estimators=100,
+                 k_cv=3,
                  val_size=0.2,
-                 k_cv=10,
-                 random_state=None):
-        """
-        Parameters
-        ----------
-        :param window_sizes: a list of integers, representing different window sizes in multi-grained scanning. If
-        'window_sizes' is None, multi-grained scanning will be omitted.
-        :param nrforests_layer: an integer, determining the number of random forests in each layer of cascade forest
-        :param ncrforests_layer: an integer, determining the number of completely (= extremely) randomized forests
-                                in each layer of cascade forest
-        :param max_cascade_depth: an integer, determining maximum allowed depth for training cascade forest
-        :param n_estimators: number of trees in a random/completely random forest
-        :param val_size: a float in the range [0, 1], determining the relative size of validation set that is used
-                        during the training of gcForest
-        :param k_cv: an integer, determining the number of folds in k-fold cross validation
-        :param random_state: an integer determining the random state for random number generator
-        """
+                 classes_=None,
+                 random_state=None,
+                 labels_encoded=False):
 
-        self.nrforests_layer = nrforests_layer
-        self.ncrforests_layer = ncrforests_layer
-        self.window_sizes = window_sizes
+        # multi-grained scanning parameters
+        self.n_rf_grain = n_rf_grain
+        self.n_crf_grain = n_crf_grain
+        self.single_shape = single_shape
+        self.window_sizes = window_sizes if window_sizes is not None else None
+        self.strides = strides if strides is not None else None
 
+        # cascade forest parameters
+        self.n_rf_cascade = n_rf_cascade
+        self.n_crf_cascade = n_crf_cascade
+
+        # general parameters
+        self.n_estimators = n_estimators
         self.k_cv = k_cv
         self.val_size = val_size
-        self.max_cascade_depth = max_cascade_depth if max_cascade_depth is not None else 100
-        self.n_estimators = n_estimators
-        self.random_state = random_state
-        self.optimal_layers = self.max_cascade_depth
+        self.classes_ = classes_
+        if random_state is not None:
+            np.random.seed(random_state)
+        self.labels_encoded = labels_encoded
 
-        # will be used to store models that make up the whole cascade
-        self._cascade = []
-        self._num_layers = 0
-        self._mg_scan_models = {}
-        self._retrain = False
+        # TODO: add parameters
+        self.early_stop_val = True
+        self.early_stop_iters = 4
+
+        # miscellaneous
+        self._grains = []
+        self._mgscan = None
+        self._casc_forest = None
 
     def _assign_labels(self, labels_train):
-        self.classes_ = np.unique(labels_train)
+        if self.classes_ is None:
+            # wanted classes not provided
+            self.classes_, encoded_labels = np.unique(labels_train, return_inverse=True)
+            # TODO: self.labels_encoded = True?
+        else:
+            encoded_labels = np.zeros_like(labels_train, np.int32)
+            for encoded_label in range(self.classes_.shape[0]):
+                encoded_labels[labels_train == self.classes_[encoded_label]] = encoded_label
 
-    def fit(self, X_train, y_train):
-        """ Fit gcForest to training data.
-        :param X_train: training features
-        :param y_train: training labels
-        :return: None (in-place training)
-        """
+        return encoded_labels
 
-        # map classes to indices in probability vector
-        self._assign_labels(y_train)
+    def _prepare_grains(self):
+        # TODO: check if 'window_sizes' and 'strides' is a list/numpy.ndarray/int/tuple
+        # ...
 
-        self._mg_scan_models = {}
-
-        # transform input features for each window size
+        self._grains = []
         if self.window_sizes is None:
-            transformed_features = [X_train]
-        else:
-            transformed_features = [self._mg_scan(X_train, y_train, window_size=w_size) for w_size in self.window_sizes]
+            return
 
-        # no splitting into training/test set if retraining model
-        if self._retrain:
-            split_transformed_features = [(feats, y_train) for feats in transformed_features]
-            curr_input_X, curr_input_y = split_transformed_features[0]
-        else:
-            split_transformed_features = [train_test_split(feats, y_train, self.val_size) for feats in transformed_features]
-            curr_input_X, curr_input_y, curr_val_X, curr_val_y = split_transformed_features[0]
+        for idx_grain in range(len(self.window_sizes)):
+            curr_grain = Grain(window_size=self.window_sizes[idx_grain],
+                               single_shape=self.single_shape,
+                               n_crf=self.n_crf_grain,
+                               n_rf=self.n_rf_grain,
+                               stride=self.strides[idx_grain],
+                               k_cv=self.k_cv,
+                               classes_=self.classes_,
+                               random_state=None,
+                               labels_encoded=True)
 
-        self._cascade = []
-        self._num_layers = 0
-        prev_acc = 0
+            self._grains.append(curr_grain)
+
+    def fit(self, feats, labels):
+        print("[fit(...)] TRAINING...")
+        if not self.labels_encoded:
+            labels = self._assign_labels(labels)
+
+        # TODO: train
+        self._prepare_grains()
+        mg_scan = MultiGrainedScanning(grains=self._grains) if len(self._grains) > 0 else None
+
+        # features that will be used in cascade forest - if multi-grained scanning was not requested,
+        # use only raw features
+        transformed_feats = mg_scan.train_all_grains(feats=feats, labels=labels) if mg_scan is not None else [feats]
+        print("[fit(...)] Multi-grained scanning shapes...")
+        for feats in transformed_feats:
+            print("[fit(...)] -> %s" % str(feats.shape))
+
+        # train_transformed_X, train_transformed_y = [], []
+        # val_transformed_X, val_transformed_y = [], []
+        # train_idx, test_idx = train_test_split(range(labels.shape[0]), test_size=self.val_size)
+        # for curr_feats in transformed_feats:
+        #     # Note: putting features and labels in 4 different arrays in hopes of cleaner code later on
+        #     # (reusing cascade_forest.CascadeForest's _pred_proba(...) function)
+        #
+        #     # train_X, train_y, val_X, val_y = common_utils.train_test_split(feats=curr_feats,
+        #     #                                                                labels=labels,
+        #     #                                                                test_size=self.val_size)
+        #
+        #     train_transformed_X.append(curr_feats[train_idx, :])
+        #     train_transformed_y.append(labels[train_idx])
+        #     val_transformed_X.append(curr_feats[test_idx, :])
+        #     val_transformed_y.append(labels[test_idx])
+
+        prev_acc, curr_acc = -1, 0
+        idx_curr_layer = 0
+        num_opt_layers = 0
+
+        # curr_input, curr_labels = train_transformed_X[0], train_transformed_y[0]
+        curr_input, curr_labels = transformed_feats[0], labels
+        cascade_forest = CascadeForest(classes_=self.classes_)
 
         while True:
-            if self._num_layers >= self.max_cascade_depth:
-                print("[fit()] Achieved max allowed depth for gcForest. Exiting...")
+            print("[fit(...)] Adding cascade layer %d..." % idx_curr_layer)
+            cascade_forest.add_layer(CascadeLayer(n_rf=self.n_rf_cascade,
+                                                  n_crf=self.n_crf_cascade,
+                                                  n_estimators=self.n_estimators,
+                                                  k_cv=self.k_cv,
+                                                  classes_=self.classes_,
+                                                  labels_encoded=True))
+
+            curr_feats = cascade_forest.train_next_layer(feats=curr_input, labels=curr_labels)
+
+            # TODO: remove this bullshit as stopping based on training accuracy is complete bullshit
+            # train_preds = np.argmax(cascade_forest.ending_layer.predict_proba(curr_feats), axis=1)
+            # train_acc = np.sum(train_preds == train_transformed_y[0]) / train_preds.shape[0]
+            # print("[fit(...)] Current TRAINING accuracy is %.5f..." % train_acc)
+
+            # TODO: validate performance
+            # val_preds = np.argmax(cascade_forest._pred_proba(val_transformed_X), axis=1)
+            # val_acc = np.sum(val_preds == val_transformed_y[0]) / val_preds.shape[0]
+            # print("[fit(...)] Current VALIDATION accuracy is %.5f..." % val_acc)
+
+            # curr_acc = val_acc if self.early_stop_val else train_acc
+            curr_acc = cascade_forest.layers[-1].kfold_acc
+
+            # TODO: if better accuracy -> set accuracies + new feats, else remove last layer and break out of this loop
+            if curr_acc <= prev_acc:
+                print("[fit(...)] Current training (kfold) accuracy <= previous accuracy... (%.5f <= %.5f)" %
+                      (curr_acc, prev_acc))
+            else:
+                print("[fit(...)] Current training (kfold) accuracy is higher than previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
+                print("[fit(...)] Concatenating features of layer %d with new feats..." % (idx_curr_layer % len(transformed_feats)))
+                curr_input = np.hstack((transformed_feats[idx_curr_layer % len(transformed_feats)], curr_feats))
+                prev_acc = curr_acc
+                num_opt_layers = idx_curr_layer
+
+            # early stopping: if the accuracy (validation if early_stop_val=True or training if early_stop_val=False)
+            # doesn't improve for early_stop_iters in a row, stop trying to grow cascade forest
+            if idx_curr_layer - num_opt_layers == self.early_stop_iters:
+                print("[fit(...)] Accuracy has not increased for %d rounds in a row..." % self.early_stop_iters)
                 break
 
-            # retrained all layers
-            if self._num_layers == self.optimal_layers:
-                return
-
-            print("[fit()] Training layer %d..." % self._num_layers)
-            curr_layer_models, new_features = self._cascade_layer(curr_input_X, curr_input_y)
-
-            # expand new level
-            self._cascade.append(curr_layer_models)
-            self._num_layers += 1
-
-            # print("[fit()] Shape of new features: ")
-            # print(new_features.shape)
-
-            if not self._retrain:
-                # extract validation sets for each window size - TODO: why exactly is this in a loop?
-                transformed_val_X = [quad[2] for quad in split_transformed_features]
-
-                # check performance of cascade on validation set
-                new_layer_acc = self._eval_cascade(transformed_val_X, curr_val_y)
-                print("[fit()] New layer accuracy is %.3f..." % new_layer_acc)
-
-                # if accuracy (with new layer) on validation set does not increase, remove the new layer and quit training
-                if new_layer_acc <= prev_acc:
-                    print("[fit()] New layer accuracy (%.3f) is <= than overall best accuracy (%.3f),"
-                          " therefore no more layers will be added to cascade..." % (new_layer_acc, prev_acc))
-
-                    del self._cascade[-1]
-                    self._num_layers -= 1
-
-                    print("[fit()] Found optimal number of layers: %d..." % self._num_layers)
-
-                    self.optimal_layers = self._num_layers
-                    self._retrain = True
-                    self.fit(X_train, y_train)
-
-                    break
-
-                # print("[fit()] Setting new best accuracy to %.3f..." % new_layer_acc)
-                prev_acc = new_layer_acc
-
-                # print("Picking up data for layer %d..." % (self._num_layers % len(split_transformed_features)))
-                raw_curr_input_X, curr_input_y, curr_val_X, curr_val_y = split_transformed_features[self._num_layers % len(split_transformed_features)]
-            else:
-                raw_curr_input_X, curr_input_y = split_transformed_features[self._num_layers % len(split_transformed_features)]
-
-            curr_input_X = np.hstack((raw_curr_input_X, new_features))
-
-    def predict(self, X_test):
-        """ Predict LABELS for test data.
-        :param X_test: training features
-        :return: np.ndarray of length (#rows of X_test)
-        """
-        if self.window_sizes is None:
-            transformed_features = [X_test]
-        else:
-            transformed_features = [self._mg_scan(X_test, window_size=w_size) for w_size in self.window_sizes]
-
-        return self._predict(transformed_features, predict_probabilities=False)
-
-    def predict_proba(self, X_test):
-        """ Predict PROBABILITIES for test data.
-        :param X_test: training features
-        :return: np.ndarray of shape [#rows of X_test, #labels in training data]
-        """
-        if self.window_sizes is None:
-            transformed_features = [X_test]
-        else:
-            transformed_features = [self._mg_scan(X_test, window_size=w_size) for w_size in self.window_sizes]
-
-        return self._predict(transformed_features, predict_probabilities=True)
-
-    def _mg_scan(self, X, y=None, window_size=50, stride=1):
-        print("[_mg_scan()] Multi-grained scanning for window size %d..." % window_size)
-        # if self.classes_ is None:
-        #     self._assign_labels(y)
-
-        _t1_debug = time.perf_counter()
-
-        slices, labels = self._slice_data(X, y, window_size, stride)
-
-        _t2_debug = time.perf_counter()
-
-        print("Time spent slicing: %f" % (_t2_debug - _t1_debug))
-
-        # print("Shape of slices is...")
-        # print(slices.shape)
-
-        # train models on obtained slices
-        if y is not None:
-            print("Training completely random forest with %d trees..." % self.n_estimators)
-            # completely random forest
-            model_crf, feats_crf = self._get_class_distrib(slices, labels, RandomForestClassifier(n_estimators=self.n_estimators,
-                                                                                                  max_features=1,
-                                                                                                  random_state=self.random_state,
-                                                                                                  n_jobs=-1))
-
-            print("Training random forest with %d trees..." % self.n_estimators)
-            # random forest
-            model_rf, feats_rf = self._get_class_distrib(slices, labels, RandomForestClassifier(n_estimators=self.n_estimators,
-                                                                                                random_state=self.random_state,
-                                                                                                n_jobs=-1))
-
-            self._mg_scan_models[window_size] = [model_crf, model_rf]
-        else:
-            model_crf, model_rf = self._mg_scan_models[window_size]
-
-            feats_crf = np.zeros((slices.shape[0], self.classes_.shape[0]), dtype=np.float32)
-            feats_rf = np.zeros((slices.shape[0], self.classes_.shape[0]), dtype=np.float32)
-
-            # reorder features to set order (self.classes_) because they might not be placed the same in sklearn's
-            # classifier (an example where this might happen is when some label is not present in training set) for
-            # a model (reordering is the same for both models because they were trained on same data)
-            right_order = find_reordering(model_crf.classes_, self.classes_)
-
-            feats_crf[:, right_order] = model_crf.predict_proba(slices)
-            feats_rf[:, right_order] = model_rf.predict_proba(slices)
-
-        # gather up parts of representation (consecutive rows in feats np.ndarray) for each example
-        transformed_feats_crf = np.reshape(feats_crf, [X.shape[0], self.classes_.shape[0] * int(feats_crf.shape[0] / X.shape[0])])
-        transformed_feats_rf = np.reshape(feats_rf, [X.shape[0], self.classes_.shape[0] * int(feats_rf.shape[0] / X.shape[0])])
-
-        return np.concatenate((transformed_feats_crf, transformed_feats_rf), axis=1)
-
-    def _slice_data(self, X, y, window_size, stride):
-
-        sliced_X = []
-        labels = []
-
-        for idx_example in range(X.shape[0]):
-            example = X[idx_example, :]
-            # print(example)
-
-            for idx in range(0, example.shape[0] - window_size + 1, stride):
-                curr_slice = example[idx: idx + window_size]
-
-                sliced_X.append(curr_slice)
-                if y is not None:
-                    labels.append(y[idx_example])
-
-        features = np.array(sliced_X)
-        labels = np.array(labels) if y is not None else None
-
-        return features, labels
-
-    def _predict(self, transformed_features, predict_probabilities=False):
-        """ Internal method, used for making predictions (either for making predictions for new data or evaluating current
-        structure).
-        :param transformed_features: a list, containing features, transformed with multi-grained scanning (1 entry in list
-        equals 1 window size)
-        :param predict_probabilities: determines whether the returned value will be probability vectors or label vectors
-        :return: either probability vectors or label vectors for each feature vector
-        """
-        # X_test ... list of transformed feature arrays (a new feature array for each window size)
-        if self._num_layers <= 0:
-            raise Exception("[predict()] Number of layers is <= 0...")
-
-        num_labels = self.classes_.shape[0]
-        curr_input = transformed_features[0]
-
-        for idx_layer in range(self._num_layers):
-            # print("[predict()] Going through layer %d..." % idx_layer)
-            curr_layer_models = self._cascade[idx_layer]
-
-            new_features = np.zeros((curr_input.shape[0], (self.ncrforests_layer + self.nrforests_layer) * num_labels))
-
-            for idx_model in range(len(curr_layer_models)):
-                # reorder features to set order (self.classes_) because they might not be placed the same in sklearn's
-                # classifier (an example where this might happen is when some label is not present in training set) for
-                # a model (reordering is the same for both models because they were trained on same data)
-                tmp = new_features[:, idx_model * num_labels: (idx_model + 1) * num_labels]
-                right_order = find_reordering(curr_layer_models[idx_model].classes_, self.classes_)
-
-                tmp[:, right_order] += curr_layer_models[idx_model].predict_proba(curr_input)
-
-                new_features[:, idx_model * num_labels: (idx_model + 1) * num_labels] = tmp
-
-
-            # last layer: get class distributions (normal procedure) and average them to obtain final distribution
-            if idx_layer == self._num_layers - 1:
-                # print("[predict()] Got to the last level...")
-                final_probs = np.zeros((curr_input.shape[0], num_labels))
-                # print("Created a vector for final predictions of shape...")
-                # print(final_probs.shape)
-
-                for idx_model in range(len(curr_layer_models)):
-                    final_probs += new_features[:, idx_model * num_labels: (idx_model + 1) * num_labels]
-
-                final_probs = np.divide(final_probs, len(curr_layer_models))
-
-                if predict_probabilities:
-                    return final_probs
-                # get most probable class
-                else:
-                    label_indices = np.argmax(final_probs, axis=1)
-                    # print("Vector of label indices has a shape of...")
-                    # print(label_indices.shape)
-                    preds = [self.classes_[idx] for idx in label_indices]
-                    return np.array(preds)
-
-            # all but the last layer: get the input concatenated with obtained class distribution vectors
-            else:
-                curr_input = np.hstack((transformed_features[(idx_layer + 1) % len(transformed_features)], new_features))
-
-    def _eval_cascade(self, X_val, y_val):
-        """ Internal method, that evaluates currently built cascade.
-        :param X_val: list of validation set transformed features (possibly obtained with multiple sliding window sizes)
-        :param y_val: validation set labels
-        :return: accuracy of cascade
-        """
-
-        # print("[_eval_cascade()] Evaluating cascade on validation data of len %d ( = number of different window sizes)" % len(X_val))
-
-        preds = self._predict(X_val)
-        cascade_acc = np.sum(preds == y_val) / y_val.shape[0]
-        print("[_eval_cascade()] Evaluated cascade and got accuracy %.3f..." % cascade_acc)
-
-        return cascade_acc
-
-    def _cascade_layer(self, X, y):
-        """ Internal method that builds a layer of cascade forest.
-        :param X: input data (features)
-        :param y: labels
-        :return: (list of trained models for current layer, distribution vector for current layer)
-        """
-
-        num_labels = self.classes_.shape[0]
-        curr_layer_models = []
-        curr_layer_distributions = np.zeros((X.shape[0], (self.ncrforests_layer + self.nrforests_layer) * num_labels))
-
-        # -- completely random forests --
-        for idx_curr_forest in range(self.ncrforests_layer):
-            print("Training completely random forest number %d..." % idx_curr_forest)
-            # each random forest produces a (#classes)-dimensional vector of class distribution
-            rf_obj = RandomForestClassifier(n_estimators=self.n_estimators,
-                                            max_features=1,
-                                            random_state=self.random_state,
-                                            n_jobs=-1)
-
-            curr_rf, curr_class_distrib = self._get_class_distrib(X, y, rf_obj)
-
-            curr_layer_models.append(curr_rf)
-            curr_layer_distributions[:, idx_curr_forest * num_labels: (idx_curr_forest + 1) * num_labels] += \
-                curr_class_distrib
-
-        # -- random forests --
-        for idx_curr_forest in range(self.nrforests_layer):
-            print("Training random forest number %d..." % idx_curr_forest)
-            # each random forest produces a (#classes)-dimensional vector of class distribution
-            rf_obj = RandomForestClassifier(n_estimators=self.n_estimators,
-                                            random_state=self.random_state,
-                                            n_jobs=-1)
-
-            curr_rf, curr_class_distrib = self._get_class_distrib(X, y, rf_obj)
-
-            curr_layer_models.append(curr_rf)
-            curr_layer_distributions[:, (self.ncrforests_layer + idx_curr_forest) * num_labels:
-                                        (self.ncrforests_layer + idx_curr_forest + 1) * num_labels] += curr_class_distrib
-
-        return curr_layer_models, curr_layer_distributions
-
-    def _get_class_distrib(self, X_train, y_train, model):
-        """ Obtains class distribution of a model in a cascade layer.
-        :param X_train: training data (features)
-        :param y_train: training data (labels)
-        :param model:
-        :return: tuple, consisting of (random_forest.RandomForest model, class distribution) where
-                class distribution has same number of rows as X_train and (#labels) columns
-        """
-
-        bins = self._kfold_cv(X_train.shape[0], self.k_cv)
-        class_distrib = np.zeros((X_train.shape[0], self.classes_.shape[0]))
-
-        # k-fold cross validation to obtain class distribution
-        for idx_test_bin in range(self.k_cv):
-            # print("Doing bin %d in cross validation..." % idx_test_bin)
-            curr_test_mask = (bins == idx_test_bin)
-            curr_train_X, curr_train_y = X_train[np.logical_not(curr_test_mask), :], y_train[np.logical_not(curr_test_mask)]
-            curr_test_X, curr_test_y = X_train[curr_test_mask, :], y_train[curr_test_mask]
-
-            model.fit(curr_train_X, curr_train_y)
-
-            # there might come a situation where a model does not get trained on a set which contains all classes in
-            # self.classes_, in that case we need to be careful to add probabilities on right places
-            right_order = find_reordering(model.classes_, self.classes_)
-
-            # can't seem to make these arrays get broadcasted to right shapes so doing it in 2 steps
-            tmp = class_distrib[curr_test_mask, :]
-            tmp[:, right_order] += model.predict_proba(curr_test_X)
-
-            class_distrib[curr_test_mask, :] = tmp
-
-        # train a RF model on whole training set, will be placed in cascade
-        model.fit(X_train, y_train)
-
-        return model, class_distrib
-
-    def _kfold_cv(self, num_examples, k):
-        """ Prepare groups for k-fold cross validation.
-        :param num_examples: number of examples in data set
-        :param k: number of groups
-        :return: np.array of size [1, num_examples] containing group ids ranging from 0 to k - 1.
-        """
-
-        if num_examples < k:
-            raise Exception("Number of examples (num_examples=%d) is lower than number of groups in k-fold CV (k=%d)..."
-                            % (num_examples, k))
-
-        limits = np.linspace(0, num_examples, k, endpoint=False)
-        bins = np.digitize(np.arange(0, num_examples), limits) - 1
-
-        return np.random.permutation(bins)
+            idx_curr_layer += 1
+
+        print("[fit(...)] Number of optimal layers was determined to be %d..." % (num_opt_layers + 1))
+        del cascade_forest
+
+        self._mgscan = mg_scan
+        self._casc_forest = CascadeForest(classes_=self.classes_)
+
+        # retrain using entire data set
+        curr_input = transformed_feats[0]
+        # TODO: retrain
+        # (num_opt_layers + 1) because num_opt_layers holds index of last useful layer (0-based)
+        for idx_layer in range(num_opt_layers + 1):
+            print("[fit(...)] Retraining layer %d..." % idx_layer)
+            self._casc_forest.add_layer(CascadeLayer(n_rf=self.n_rf_cascade,
+                                                     n_crf=self.n_crf_cascade,
+                                                     n_estimators=self.n_estimators,
+                                                     k_cv=self.k_cv,
+                                                     classes_=self.classes_,
+                                                     labels_encoded=True))
+
+            curr_feats = self._casc_forest.train_next_layer(feats=curr_input, labels=labels)
+            print("[fit(...)] Concatenating features of layer %d with new feats..." % (idx_layer % len(transformed_feats)))
+            curr_input = np.hstack((transformed_feats[idx_layer % len(transformed_feats)], curr_feats))
+
+        print("[fit(...)] Done training!\n")
+
+    def predict_proba(self, feats):
+        print("[predict_proba(...)] Predicting probabilities...")
+        if self._casc_forest is None:
+            raise Exception("GrainedCascadeForest is not trained yet!")
+
+        transformed_feats = self._mgscan.transform_all_grains(feats=feats) if self._mgscan is not None else [feats]
+        print("[predict_proba(...)] Multi-grained scanning shapes...")
+        for feats in transformed_feats:
+            print("[predict_proba(...)] -> %s" % str(feats.shape))
+
+        return self._casc_forest._pred_proba(transformed_feats)
+
+    def predict(self, feats):
+        return self.classes_[np.argmax(self.predict_proba(feats=feats), axis=1)]
