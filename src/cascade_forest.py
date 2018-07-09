@@ -117,7 +117,6 @@ class CascadeLayer:
             np.random.seed(random_state)
         self.labels_encoded = labels_encoded
 
-        self.estimators = []
         self.idx_fit_next = 0
 
         self.kfold_acc = None
@@ -177,7 +176,6 @@ class CascadeLayer:
 
             feats_crf.append(curr_proba_preds)
 
-        # TODO: I THINK THERE NEEDS TO BE A DIVISION HERE WTF
         feats_crf = np.hstack(feats_crf)
 
         for idx_model in range(self.n_rf):
@@ -187,7 +185,6 @@ class CascadeLayer:
 
             feats_rf.append(curr_proba_preds)
 
-        # TODO: I THINK THERE NEEDS TO BE A DIVISION HERE WTF
         feats_rf = np.hstack(feats_rf)
 
         return np.hstack((feats_crf, feats_rf))

@@ -1,5 +1,8 @@
 import numpy as np
 from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.externals import joblib
+import os
+import shutil
 
 
 def get_class_distribution(feats, labels, model, num_all_classes, k_cv=3):
@@ -20,11 +23,10 @@ def get_class_distribution(feats, labels, model, num_all_classes, k_cv=3):
     :param k_cv: int (default: 3)
             Parameter for k-fold cross validation.
     :return: tuple
-            (trained model, class distribution) where class distribution has same number of rows as 'feats' and
-            (num_all_classes) columns.
+            (trained model, class distribution, average accuracy) where class distribution has same number of rows as
+            'feats' and (num_all_classes) columns.
     """
 
-    # TODO: maybe add option for random state?
     kf = StratifiedKFold(n_splits=k_cv, shuffle=True)
 
     class_distrib = np.zeros((feats.shape[0], num_all_classes))
@@ -49,3 +51,25 @@ def get_class_distribution(feats, labels, model, num_all_classes, k_cv=3):
     model.fit(feats, labels)
 
     return model, class_distrib, avg_acca
+
+
+def create_cache_dir(dir_path):
+    # creates directory if it doesn't yet exist - if it does exist, it preserves original directory
+    os.makedirs(dir_path, exist_ok=True)
+
+
+def remove_cache_dir(dir_path):
+    # cleans up cache directory
+    shutil.rmtree(dir_path, ignore_errors=True)
+
+
+def save_data(data_obj, path):
+    print("Saving data!")
+    joblib.dump(value=data_obj,
+                filename=path,
+                protocol=-1)
+
+
+def load_data(path):
+    print("Loading data!")
+    return joblib.load(filename=path)

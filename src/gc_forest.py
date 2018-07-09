@@ -1,17 +1,9 @@
 import numpy as np
 from mg_scanning import *
 from cascade_forest import *
-from sklearn.model_selection import train_test_split
-
 
 # debug
 import time
-
-# finds (and returns) where elements of array 'first' are in array 'second'
-# warning: very expensive in terms of memory!
-# found at: https://stackoverflow.com/a/40449296
-def find_reordering(first, second):
-    return np.where(second[:, None] == first[None, :])[0]
 
 
 class GrainedCascadeForest:
@@ -52,6 +44,7 @@ class GrainedCascadeForest:
         # TODO: add parameters
         self.early_stop_val = True
         self.early_stop_iters = 4
+        self.cache_dir = "tmp/"
 
         # miscellaneous
         self._grains = []
@@ -62,7 +55,6 @@ class GrainedCascadeForest:
         if self.classes_ is None:
             # wanted classes not provided
             self.classes_, encoded_labels = np.unique(labels_train, return_inverse=True)
-            # TODO: self.labels_encoded = True?
         else:
             encoded_labels = np.zeros_like(labels_train, np.int32)
             for encoded_label in range(self.classes_.shape[0]):
@@ -96,7 +88,6 @@ class GrainedCascadeForest:
         if not self.labels_encoded:
             labels = self._assign_labels(labels)
 
-        # TODO: train
         self._prepare_grains()
         mg_scan = MultiGrainedScanning(grains=self._grains) if len(self._grains) > 0 else None
 
@@ -106,22 +97,6 @@ class GrainedCascadeForest:
         print("[fit(...)] Multi-grained scanning shapes...")
         for feats in transformed_feats:
             print("[fit(...)] -> %s" % str(feats.shape))
-
-        # train_transformed_X, train_transformed_y = [], []
-        # val_transformed_X, val_transformed_y = [], []
-        # train_idx, test_idx = train_test_split(range(labels.shape[0]), test_size=self.val_size)
-        # for curr_feats in transformed_feats:
-        #     # Note: putting features and labels in 4 different arrays in hopes of cleaner code later on
-        #     # (reusing cascade_forest.CascadeForest's _pred_proba(...) function)
-        #
-        #     # train_X, train_y, val_X, val_y = common_utils.train_test_split(feats=curr_feats,
-        #     #                                                                labels=labels,
-        #     #                                                                test_size=self.val_size)
-        #
-        #     train_transformed_X.append(curr_feats[train_idx, :])
-        #     train_transformed_y.append(labels[train_idx])
-        #     val_transformed_X.append(curr_feats[test_idx, :])
-        #     val_transformed_y.append(labels[test_idx])
 
         prev_acc, curr_acc = -1, 0
         idx_curr_layer = 0
@@ -142,26 +117,14 @@ class GrainedCascadeForest:
 
             curr_feats = cascade_forest.train_next_layer(feats=curr_input, labels=curr_labels)
 
-            # TODO: remove this bullshit as stopping based on training accuracy is complete bullshit
-            # train_preds = np.argmax(cascade_forest.ending_layer.predict_proba(curr_feats), axis=1)
-            # train_acc = np.sum(train_preds == train_transformed_y[0]) / train_preds.shape[0]
-            # print("[fit(...)] Current TRAINING accuracy is %.5f..." % train_acc)
-
-            # TODO: validate performance
-            # val_preds = np.argmax(cascade_forest._pred_proba(val_transformed_X), axis=1)
-            # val_acc = np.sum(val_preds == val_transformed_y[0]) / val_preds.shape[0]
-            # print("[fit(...)] Current VALIDATION accuracy is %.5f..." % val_acc)
-
-            # curr_acc = val_acc if self.early_stop_val else train_acc
+            # k-fold cross-validation accuracy to determine optimal number of layers
             curr_acc = cascade_forest.layers[-1].kfold_acc
 
-            # TODO: if better accuracy -> set accuracies + new feats, else remove last layer and break out of this loop
             if curr_acc <= prev_acc:
-                print("[fit(...)] Current training (kfold) accuracy <= previous accuracy... (%.5f <= %.5f)" %
+                print("[fit(...)] Current accuracy <= previous accuracy... (%.5f <= %.5f)" %
                       (curr_acc, prev_acc))
             else:
-                print("[fit(...)] Current training (kfold) accuracy is higher than previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
-                print("[fit(...)] Concatenating features of layer %d with new feats..." % (idx_curr_layer % len(transformed_feats)))
+                print("[fit(...)] Current accuracy is higher than previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
                 curr_input = np.hstack((transformed_feats[idx_curr_layer % len(transformed_feats)], curr_feats))
                 prev_acc = curr_acc
                 num_opt_layers = idx_curr_layer
@@ -182,7 +145,7 @@ class GrainedCascadeForest:
 
         # retrain using entire data set
         curr_input = transformed_feats[0]
-        # TODO: retrain
+
         # (num_opt_layers + 1) because num_opt_layers holds index of last useful layer (0-based)
         for idx_layer in range(num_opt_layers + 1):
             print("[fit(...)] Retraining layer %d..." % idx_layer)
