@@ -88,7 +88,8 @@ class CascadeLayer:
                  k_cv=3,
                  classes_=None,
                  random_state=None,
-                 labels_encoded=False):
+                 labels_encoded=False,
+                 keep_models=True):
         """
         Parameters
         ----------
@@ -106,6 +107,9 @@ class CascadeLayer:
                 The random state for random number generator.
         :param labels_encoded: bool (default: False)
                 Will labels in training set already be encoded as stated in 'classes_'?
+        :param keep_models: bool (default: True)
+                Whether to keep trained models or not. An example of when you do not need to keep models is
+                when determining number of optimal layers in the cascade forest.
         """
         self.n_rf, self.rf_estimators = n_rf, []
         self.n_crf, self.crf_estimators = n_crf, []
@@ -116,6 +120,7 @@ class CascadeLayer:
         if random_state is not None:
             np.random.seed(random_state)
         self.labels_encoded = labels_encoded
+        self.keep_models = keep_models
 
         self.idx_fit_next = 0
 
@@ -138,7 +143,8 @@ class CascadeLayer:
 
             layer_acc += curr_acc
 
-            self.crf_estimators.append(curr_model)
+            if self.keep_models:
+                self.crf_estimators.append(curr_model)
             feats_crf.append(curr_feats)
 
         feats_crf = np.hstack(feats_crf)
@@ -148,14 +154,15 @@ class CascadeLayer:
                                               max_features=1,
                                               n_jobs=-1)
             curr_model, curr_feats, curr_acc = common_utils.get_class_distribution(feats=feats,
-                                                                         labels=labels,
-                                                                         model=rf_model,
-                                                                         num_all_classes=self.classes_.shape[0],
-                                                                         k_cv=self.k_cv)
+                                                                                   labels=labels,
+                                                                                   model=rf_model,
+                                                                                   num_all_classes=self.classes_.shape[0],
+                                                                                   k_cv=self.k_cv)
 
             layer_acc += curr_acc
 
-            self.rf_estimators.append(curr_model)
+            if self.keep_models:
+                self.rf_estimators.append(curr_model)
             feats_rf.append(curr_feats)
 
         feats_rf = np.hstack(feats_rf)
@@ -166,7 +173,65 @@ class CascadeLayer:
 
         return np.hstack((feats_crf, feats_rf))
 
+    def fit_transform(self, train_feats, train_labels, test_feats):
+        train_feats_crf, train_feats_rf, test_feats_crf, test_feats_rf = [], [], [], []
+
+        layer_acc = 0.0
+
+        for idx_crf in range(self.n_crf):
+            curr_model = ExtraTreesClassifier(n_estimators=self.n_estimators,
+                                              max_features=1,
+                                              n_jobs=-1)
+            curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
+                                                                                         labels=train_labels,
+                                                                                         model=curr_model,
+                                                                                         num_all_classes=self.classes_.shape[0],
+                                                                                         k_cv=self.k_cv)
+
+            curr_test_feats = np.zeros((test_feats.shape[0], self.classes_.shape[0]))
+            class_indices = curr_model.classes_
+            curr_test_feats[:, class_indices] = curr_model.predict_proba(test_feats)
+
+            layer_acc += curr_acc
+
+            train_feats_crf.append(curr_train_feats)
+            test_feats_crf.append(curr_test_feats)
+
+        train_feats_crf = np.hstack(train_feats_crf)
+        test_feats_crf = np.hstack(test_feats_crf)
+
+        for idx_rf in range(self.n_rf):
+            curr_model = RandomForestClassifier(n_estimators=self.n_estimators,
+                                                max_features=1,
+                                                n_jobs=-1)
+            curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
+                                                                                         labels=train_labels,
+                                                                                         model=curr_model,
+                                                                                         num_all_classes=self.classes_.shape[0],
+                                                                                         k_cv=self.k_cv)
+
+            curr_test_feats = np.zeros((test_feats.shape[0], self.classes_.shape[0]))
+            class_indices = curr_model.classes_
+            curr_test_feats[:, class_indices] = curr_model.predict_proba(test_feats)
+
+            layer_acc += curr_acc
+            train_feats_rf.append(curr_train_feats)
+            test_feats_rf.append(curr_test_feats)
+
+        train_feats_rf = np.hstack(train_feats_rf)
+        test_feats_rf = np.hstack(test_feats_rf)
+
+        layer_acc /= (self.n_rf + self.n_crf)
+        self.kfold_acc = layer_acc
+        print("Average LAYER accuracy is %f..." % self.kfold_acc)
+
+        return np.hstack((train_feats_crf, train_feats_rf)), np.hstack((test_feats_crf, test_feats_rf))
+
     def transform(self, feats):
+        if not self.keep_models:
+            raise Exception("Models were not saved during training. Argument 'keep_models' should be set to True "
+                            "when creating a CascadeLayer...")
+
         feats_crf, feats_rf = [], []
 
         for idx_model in range(self.n_crf):

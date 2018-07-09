@@ -17,6 +17,7 @@ class GrainedCascadeForest:
                  n_estimators=100,
                  k_cv=3,
                  val_size=0.2,
+                 early_stop_iters=1,
                  classes_=None,
                  random_state=None,
                  labels_encoded=False):
@@ -36,14 +37,13 @@ class GrainedCascadeForest:
         self.n_estimators = n_estimators
         self.k_cv = k_cv
         self.val_size = val_size
+        self.early_stop_iters = early_stop_iters
         self.classes_ = classes_
         if random_state is not None:
             np.random.seed(random_state)
         self.labels_encoded = labels_encoded
 
         # TODO: add parameters
-        self.early_stop_val = True
-        self.early_stop_iters = 4
         self.cache_dir = "tmp/"
 
         # miscellaneous
@@ -113,19 +113,21 @@ class GrainedCascadeForest:
                                                   n_estimators=self.n_estimators,
                                                   k_cv=self.k_cv,
                                                   classes_=self.classes_,
-                                                  labels_encoded=True))
+                                                  labels_encoded=True,
+                                                  keep_models=False))
 
             curr_feats = cascade_forest.train_next_layer(feats=curr_input, labels=curr_labels)
 
             # k-fold cross-validation accuracy to determine optimal number of layers
             curr_acc = cascade_forest.layers[-1].kfold_acc
 
+            curr_input = np.hstack((transformed_feats[idx_curr_layer % len(transformed_feats)], curr_feats))
+
             if curr_acc <= prev_acc:
                 print("[fit(...)] Current accuracy <= previous accuracy... (%.5f <= %.5f)" %
                       (curr_acc, prev_acc))
             else:
-                print("[fit(...)] Current accuracy is higher than previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
-                curr_input = np.hstack((transformed_feats[idx_curr_layer % len(transformed_feats)], curr_feats))
+                print("[fit(...)] Current accuracy > previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
                 prev_acc = curr_acc
                 num_opt_layers = idx_curr_layer
 
@@ -161,6 +163,76 @@ class GrainedCascadeForest:
             curr_input = np.hstack((transformed_feats[idx_layer % len(transformed_feats)], curr_feats))
 
         print("[fit(...)] Done training!\n")
+
+    # simultaneously fit layers on training data and predict for new data (using trained layer)
+    # done in an attempt to try to avoid having to save all models to disk and then re-loading them and predicting
+    def fit_predict(self, train_feats, train_labels, test_feats):
+        if not self.labels_encoded:
+            train_labels = self._assign_labels(train_labels)
+
+        self._prepare_grains()
+        mg_scan = MultiGrainedScanning(grains=self._grains) if len(self._grains) > 0 else None
+
+        # features that will be used in cascade forest - if multi-grained scanning was not requested,
+        # use only raw features
+        train_transformed_feats = mg_scan.train_all_grains(feats=train_feats,
+                                                           labels=train_labels) if mg_scan is not None else [train_feats]
+
+        test_transformed_feats = mg_scan.transform_all_grains(feats=test_feats) if mg_scan is not None else [test_feats]
+
+        print("[fit(...)] Multi-grained scanning shapes...")
+        for feats in train_transformed_feats:
+            print("[fit(...)] -> %s" % str(feats.shape))
+
+        prev_acc, curr_acc = -1, 0
+        idx_curr_layer = 0
+        num_opt_layers = 0
+
+        curr_train_input, curr_train_labels = train_transformed_feats[0], train_labels
+        curr_test_input = test_transformed_feats[0]
+
+        while True:
+            curr_layer = CascadeLayer(n_rf=self.n_rf_cascade,
+                                      n_crf=self.n_crf_cascade,
+                                      n_estimators=self.n_estimators,
+                                      k_cv=self.k_cv,
+                                      classes_=self.classes_,
+                                      labels_encoded=True,
+                                      keep_models=False)
+
+            curr_train_feats, curr_test_feats = curr_layer.fit_transform(train_feats=curr_train_input,
+                                                                         train_labels=curr_train_labels,
+                                                                         test_feats=curr_test_input)
+
+            # k-fold cross-validation accuracy to determine optimal number of layers
+            curr_acc = curr_layer.kfold_acc
+
+            curr_train_input = np.hstack((train_transformed_feats[idx_curr_layer % len(train_transformed_feats)],
+                                          curr_train_feats))
+            curr_test_input = np.hstack((test_transformed_feats[idx_curr_layer % len(test_transformed_feats)],
+                                         curr_test_feats))
+
+            if curr_acc <= prev_acc:
+                print("[fit(...)] Current accuracy <= previous accuracy... (%.5f <= %.5f)" %
+                      (curr_acc, prev_acc))
+            else:
+                print("[fit(...)] Current accuracy > previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
+                end_layer = EndingLayer(classes_=self.classes_)
+
+                # act as if every layer with higher accuracy is the last layer
+                preds = end_layer.predict(feats=curr_test_feats)
+
+                prev_acc = curr_acc
+                num_opt_layers = idx_curr_layer
+
+            # early stopping: if the accuracy doesn't improve for 'early_stop_iters' in a row, finish the process
+            if idx_curr_layer - num_opt_layers == self.early_stop_iters:
+                print("[fit(...)] Accuracy has not increased for %d rounds in a row..." % self.early_stop_iters)
+                break
+
+            idx_curr_layer += 1
+
+        return preds
 
     def predict_proba(self, feats):
         print("[predict_proba(...)] Predicting probabilities...")
