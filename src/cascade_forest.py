@@ -151,7 +151,6 @@ class CascadeLayer:
 
         for idx_rf in range(self.n_rf):
             rf_model = RandomForestClassifier(n_estimators=self.n_estimators,
-                                              max_features=1,
                                               n_jobs=-1)
             curr_model, curr_feats, curr_acc = common_utils.get_class_distribution(feats=feats,
                                                                                    labels=labels,
@@ -202,7 +201,6 @@ class CascadeLayer:
 
         for idx_rf in range(self.n_rf):
             curr_model = RandomForestClassifier(n_estimators=self.n_estimators,
-                                                max_features=1,
                                                 n_jobs=-1)
             curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
                                                                                          labels=train_labels,
