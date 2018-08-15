@@ -1,20 +1,24 @@
 import numpy as np
-from mg_scanning import *
-from cascade_forest import *
 
-# debug
-import time
+from mg_scanning import Grain, MultiGrainedScanning
+from cascade_forest import CascadeLayer, CascadeForest, EndingLayerAverage, EndingLayerStacking
 
 
 class GrainedCascadeForest:
     def __init__(self, single_shape=None,
                  n_rf_grain=1,
                  n_crf_grain=1,
+                 n_rsf_grain=0,
+                 n_xonf_grain=0,
                  n_rf_cascade=2,
                  n_crf_cascade=2,
+                 n_rsf_cascade=0,
+                 n_xonf_cascade=0,
+                 end_layer_cascade="avg",
                  window_sizes=None,
                  strides=None,
                  n_estimators=100,
+                 n_estimators_xonf=100,
                  k_cv=3,
                  val_size=0.2,
                  early_stop_iters=1,
@@ -25,6 +29,8 @@ class GrainedCascadeForest:
         # multi-grained scanning parameters
         self.n_rf_grain = n_rf_grain
         self.n_crf_grain = n_crf_grain
+        self.n_rsf_grain = n_rsf_grain
+        self.n_xonf_grain = n_xonf_grain
         self.single_shape = single_shape
         self.window_sizes = window_sizes if window_sizes is not None else None
         self.strides = strides if strides is not None else None
@@ -32,9 +38,13 @@ class GrainedCascadeForest:
         # cascade forest parameters
         self.n_rf_cascade = n_rf_cascade
         self.n_crf_cascade = n_crf_cascade
+        self.n_rsf_cascade = n_rsf_cascade
+        self.n_xonf_cascade = n_xonf_cascade
+        self.end_layer_cascade = end_layer_cascade
 
         # general parameters
         self.n_estimators = n_estimators
+        self.n_estimators_xonf = n_estimators_xonf
         self.k_cv = k_cv
         self.val_size = val_size
         self.early_stop_iters = early_stop_iters
@@ -75,6 +85,10 @@ class GrainedCascadeForest:
                                single_shape=self.single_shape,
                                n_crf=self.n_crf_grain,
                                n_rf=self.n_rf_grain,
+                               n_rsf=self.n_rsf_grain,
+                               n_xonf=self.n_xonf_grain,
+                               n_estimators=self.n_estimators,
+                               n_estimators_xonf=self.n_estimators_xonf,  # TODO
                                stride=self.strides[idx_grain],
                                k_cv=self.k_cv,
                                classes_=self.classes_,
@@ -104,13 +118,17 @@ class GrainedCascadeForest:
 
         # curr_input, curr_labels = train_transformed_X[0], train_transformed_y[0]
         curr_input, curr_labels = transformed_feats[0], labels
-        cascade_forest = CascadeForest(classes_=self.classes_)
+        # TODO: add options for switching models in last layer
+        cascade_forest = CascadeForest(classes_=self.classes_, ending_layer=self.end_layer_cascade, k_cv=self.k_cv)
 
         while True:
             print("[fit(...)] Adding cascade layer %d..." % idx_curr_layer)
             cascade_forest.add_layer(CascadeLayer(n_rf=self.n_rf_cascade,
                                                   n_crf=self.n_crf_cascade,
+                                                  n_rsf=self.n_rsf_cascade,
+                                                  n_xonf=self.n_xonf_cascade,
                                                   n_estimators=self.n_estimators,
+                                                  n_estimators_xonf=self.n_estimators_xonf,
                                                   k_cv=self.k_cv,
                                                   classes_=self.classes_,
                                                   labels_encoded=True,
@@ -143,7 +161,7 @@ class GrainedCascadeForest:
         del cascade_forest
 
         self._mgscan = mg_scan
-        self._casc_forest = CascadeForest(classes_=self.classes_)
+        self._casc_forest = CascadeForest(classes_=self.classes_, ending_layer=self.end_layer_cascade, k_cv=self.k_cv)
 
         # retrain using entire data set
         curr_input = transformed_feats[0]
@@ -153,7 +171,10 @@ class GrainedCascadeForest:
             print("[fit(...)] Retraining layer %d..." % idx_layer)
             self._casc_forest.add_layer(CascadeLayer(n_rf=self.n_rf_cascade,
                                                      n_crf=self.n_crf_cascade,
+                                                     n_rsf=self.n_rsf_cascade,
+                                                     n_xonf=self.n_xonf_cascade,
                                                      n_estimators=self.n_estimators,
+                                                     n_estimators_xonf=self.n_estimators_xonf,
                                                      k_cv=self.k_cv,
                                                      classes_=self.classes_,
                                                      labels_encoded=True))
@@ -161,6 +182,8 @@ class GrainedCascadeForest:
             curr_feats = self._casc_forest.train_next_layer(feats=curr_input, labels=labels)
             print("[fit(...)] Concatenating features of layer %d with new feats..." % (idx_layer % len(transformed_feats)))
             curr_input = np.hstack((transformed_feats[idx_layer % len(transformed_feats)], curr_feats))
+
+        self._casc_forest.ending_layer.fit(curr_input, labels)
 
         print("[fit(...)] Done training!\n")
 
@@ -175,14 +198,25 @@ class GrainedCascadeForest:
 
         # features that will be used in cascade forest - if multi-grained scanning was not requested,
         # use only raw features
-        train_transformed_feats = mg_scan.train_all_grains(feats=train_feats,
-                                                           labels=train_labels) if mg_scan is not None else [train_feats]
+        if mg_scan is not None:
+            print("[fit_predict(...)] Performing multi-grained scanning...")
+            train_transformed_feats, test_transformed_feats = mg_scan.fit_transform_all_grains(train_feats=train_feats,
+                                                                                               train_labels=train_labels,
+                                                                                               test_feats=test_feats)
+        else:
+            print("[fit_predict(...)] Multi-grained scanning was not requested so defaulting to raw features...")
+            train_transformed_feats, test_transformed_feats = [train_feats], [test_feats]
 
-        test_transformed_feats = mg_scan.transform_all_grains(feats=test_feats) if mg_scan is not None else [test_feats]
-
-        print("[fit(...)] Multi-grained scanning shapes...")
+        print("[fit_predict(...)] Multi-grained scanning shapes...")
         for feats in train_transformed_feats:
-            print("[fit(...)] -> %s" % str(feats.shape))
+            print("[fit_predict(...)] -> %s" % str(feats.shape))
+
+        if self.end_layer_cascade == "avg":
+            end_layer = EndingLayerAverage(classes_=self.classes_)
+        elif self.end_layer_cascade == "stack":
+            end_layer = EndingLayerStacking(classes_=self.classes_, k_cv=self.k_cv)
+        else:
+            raise NotImplementedError("'ending_layer' must be one of {%s}" % ",".join(["avg", "stack"]))
 
         prev_acc, curr_acc = -1, 0
         idx_curr_layer = 0
@@ -194,7 +228,10 @@ class GrainedCascadeForest:
         while True:
             curr_layer = CascadeLayer(n_rf=self.n_rf_cascade,
                                       n_crf=self.n_crf_cascade,
+                                      n_rsf=self.n_rsf_cascade,
+                                      n_xonf=self.n_xonf_cascade,
                                       n_estimators=self.n_estimators,
+                                      n_estimators_xonf=self.n_estimators_xonf,
                                       k_cv=self.k_cv,
                                       classes_=self.classes_,
                                       labels_encoded=True,
@@ -213,21 +250,21 @@ class GrainedCascadeForest:
                                          curr_test_feats))
 
             if curr_acc <= prev_acc:
-                print("[fit(...)] Current accuracy <= previous accuracy... (%.5f <= %.5f)" %
+                print("[fit_predict(...)] Current accuracy <= previous accuracy... (%.5f <= %.5f)" %
                       (curr_acc, prev_acc))
             else:
-                print("[fit(...)] Current accuracy > previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
-                end_layer = EndingLayer(classes_=self.classes_)
-
+                print("[fit_predict(...)] Current accuracy > previous accuracy... (%.5f > %.5f)" % (curr_acc, prev_acc))
                 # act as if every layer with higher accuracy is the last layer
-                preds = end_layer.predict(feats=curr_test_feats)
+                preds = end_layer.fit_predict(train_feats=curr_train_feats,
+                                              train_labels=curr_train_labels,
+                                              test_feats=curr_test_feats)
 
                 prev_acc = curr_acc
                 num_opt_layers = idx_curr_layer
 
             # early stopping: if the accuracy doesn't improve for 'early_stop_iters' in a row, finish the process
             if idx_curr_layer - num_opt_layers == self.early_stop_iters:
-                print("[fit(...)] Accuracy has not increased for %d rounds in a row..." % self.early_stop_iters)
+                print("[fit_predict(...)] Accuracy has not increased for %d rounds in a row..." % self.early_stop_iters)
                 break
 
             idx_curr_layer += 1

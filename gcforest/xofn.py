@@ -1,7 +1,4 @@
 import numpy as np
-from sklearn.model_selection import KFold
-import datasets
-from time import perf_counter
 
 
 class XOfNAttribute(object):
@@ -257,7 +254,7 @@ def _res_gini_numerical(feat, target, sorted_thresholds=None):
     return best_gini, idx_best_thresh
 
 
-def search_xofn(train_feats, train_labels, available_attrs, last_xon, op_del):
+def search_xofn(train_feats, train_labels, available_attrs, last_xon, op_del, available_thresh=None):
     """
     Parameters
     ----------
@@ -272,6 +269,9 @@ def search_xofn(train_feats, train_labels, available_attrs, last_xon, op_del):
     op_del: bool
         A flag, specifying whether deleting an attribute from 'last_xofn' should be performed. If False,
         insertion of a new (attribute, threshold) will be performed instead.
+    available_thresh: list
+        Thresholds that will be considered when trying to add (`op_del=False`) an (attr, thresh) pair to X-of-N
+        attribute.
 
     Returns
     -------
@@ -345,10 +345,10 @@ def search_xofn(train_feats, train_labels, available_attrs, last_xon, op_del):
                                      cost=ovr_best_compl)
 
     else:
-        for idx_attr in available_attrs:
+        for i, idx_attr in enumerate(available_attrs):
             valid_attrs = np.array(last_xon.idx_attr + [idx_attr])
-
-            curr_attr_thresh = _find_valid_values(train_feats[:, idx_attr], train_labels)
+            curr_attr_thresh = _find_valid_values(train_feats[:, idx_attr], train_labels) \
+                if available_thresh is None else available_thresh[i]
             for thr in curr_attr_thresh:
                 valid_thresh = np.array(last_xon.thresh_val + [thr])
 
@@ -382,6 +382,99 @@ def search_xofn(train_feats, train_labels, available_attrs, last_xon, op_del):
                                      cost=ovr_best_compl)
 
     return new_attr, ovr_best_gini
+
+
+def very_greedy_construct_xofn(train_feats, train_labels, available_attrs=None, available_thresh=None):
+    """WARNING: experimental!"""
+    if train_feats.ndim == 0:
+        train_feats = np.expand_dims(train_feats, 0)
+
+    if available_attrs is None:
+        available_attrs = np.arange(train_feats.shape[1])
+
+    # element at index i is best XofN attribute that consists of i attributes
+    best_xons = [None]
+    del_applied = [True]
+
+    best_gini, best_thresh, idx_best_attr = 1 + 0.01, np.nan, 0
+    best_compl = np.inf
+    # `attr_best_thresh[i]` is the best threshold for attribute `available_attrs[i]`
+    attr_best_thresh = []
+
+    for i, idx_attr in enumerate(available_attrs):
+        curr_thresh = _find_valid_values(train_feats[:, idx_attr], train_labels) if available_thresh is None else \
+            available_thresh[i]
+        gini, idx_thresh = _res_gini_numerical(feat=train_feats[:, idx_attr],
+                                               target=train_labels,
+                                               sorted_thresholds=curr_thresh)
+        attr_best_thresh.append([curr_thresh[idx_thresh]])
+
+        new_cost = _eval_attr(curr_gini=gini,
+                              best_gini=best_gini,
+                              best_compl=best_compl,
+                              train_feats=train_feats,
+                              attr_feats=[idx_attr],
+                              attr_thresh=curr_thresh[idx_thresh],
+                              available_attrs=available_attrs)
+
+        if new_cost:
+            best_gini = gini
+            best_thresh = curr_thresh[idx_thresh]
+            idx_best_attr = idx_attr
+            best_compl = new_cost
+
+    best_xons.append(XOfNAttribute([idx_best_attr], [best_thresh], split_val=1, cost=best_compl))
+    del_applied.append(True)  # deletion attempt would be pointless
+
+    # length of last X-of-N attribute constructed
+    len_last_xon = 1
+    # number of consequent iterations in which no insertion of new (attr, val) pairs was performed
+    iters_no_add = 0
+
+    while len_last_xon > 0:
+        if iters_no_add == 5:
+            break
+        # specifies if the algorithm should try deletion or insertion of an (attr, val) pair
+        do_del = not del_applied[len_last_xon]
+        # print("Trying to %s an (attr, val) %s X-of-N of size %d..." % ("delete" if do_del else "insert",
+        #                                                                "from" if do_del else "into", len_last_xon))
+        new_attr, new_gini = search_xofn(train_feats=train_feats,
+                                         train_labels=train_labels,
+                                         available_attrs=available_attrs,
+                                         available_thresh=attr_best_thresh,
+                                         last_xon=best_xons[len_last_xon],
+                                         op_del=do_del)
+
+        if do_del:
+            del_applied[len_last_xon] = True
+
+            if new_attr is not None:
+                # delete resulted in a better X-of-N attribute
+                best_gini = new_gini
+                len_last_xon -= 1
+                best_xons[len_last_xon] = new_attr
+                if len_last_xon > 1:
+                    del_applied[len_last_xon] = False
+                iters_no_add += 1
+        else:
+            if new_attr is None:
+                # tried both deletion and insertion on current attribute, nothing resulted in a better attribute
+                # print("Neither DEL nor INS produced better attribute, ending... [Best X-of-N attribute length: %d]"
+                #       % len_last_xon)
+                break
+            else:
+                iters_no_add = 0
+
+                best_gini = new_gini
+                len_last_xon += 1
+                if len_last_xon >= len(best_xons):
+                    best_xons.append(new_attr)
+                    del_applied.append(False)
+                else:
+                    best_xons[len_last_xon] = new_attr
+                    # del_applied[len_last_xon] = False
+
+    return best_xons[len_last_xon], best_gini
 
 
 def construct_xofn(train_feats, train_labels, available_attrs=None):
@@ -619,7 +712,7 @@ class XOfNTree(object):
         prior_gini = _gini(class_dist, n_samples)
         selected_attrs = np.random.choice(n_attrs, size=self._max_feats, replace=False) \
             if self._max_feats < n_attrs else np.arange(n_attrs)
-        new_attr, new_gini = construct_xofn(curr_feats, curr_labels, available_attrs=selected_attrs)
+        new_attr, new_gini = very_greedy_construct_xofn(curr_feats, curr_labels, available_attrs=selected_attrs)
 
         # if best possible constructed attribute is of length > 1 and has same gini, that means it reduces
         # representation complexity (which means the algorithm should not terminate just yet)
@@ -628,6 +721,7 @@ class XOfNTree(object):
             probas[uniqs] = class_dist / n_samples
             return TreeNode.create_leaf(probas, outcome=np.argmax(probas))
 
+        # print("Prior: %.5f vs new: %.5f" % (prior_gini, new_gini))
         # contains number of true conditions in newly created X-of-N attribute for each row in `train_feats`
         xon_vals = _apply_attr(curr_feats,
                                valid_attrs=new_attr.idx_attr,
