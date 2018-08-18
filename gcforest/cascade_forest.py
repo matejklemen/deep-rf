@@ -101,14 +101,15 @@ class CascadeLayer:
                  n_crf=2,
                  n_rsf=0,
                  n_xonf=0,
-                 n_estimators=100,
+                 n_estimators_rf=100,
+                 n_estimators_crf=100,
+                 n_estimators_rsf=100,
                  n_estimators_xonf=100,
                  k_cv=3,
                  classes_=None,
                  random_state=None,
                  labels_encoded=False,
                  keep_models=True):
-        # TODO: add separate `n_estimators_...` for each model in params
         """
         Parameters
         ----------
@@ -119,8 +120,6 @@ class CascadeLayer:
         # TODO: add `n_rsf` to doc
         # TODO: add `n_xonf` to doc
         # TODO: add separate `n_estimators_...` for each model in doc
-        :param n_estimators: int (default: 100)
-                Number of trees in a single forest.
         :param k_cv: int (default: 3)
                 Parameter for k-fold cross validation.
         :param classes_: list or numpy.ndarray (default: None)
@@ -137,7 +136,9 @@ class CascadeLayer:
         self.n_crf, self.crf_estimators = n_crf, []
         self.n_rsf, self.rsf_estimators = n_rsf, []
         self.n_xonf, self.xonf_estimators = n_xonf, []
-        self.n_estimators = n_estimators
+        self.n_estimators_rf = n_estimators_rf
+        self.n_estimators_crf = n_estimators_crf
+        self.n_estimators_rsf = n_estimators_rsf
         self.n_estimators_xonf = n_estimators_xonf
 
         self.k_cv = k_cv
@@ -164,7 +165,7 @@ class CascadeLayer:
 
         # train completely random forests
         for idx_crf in range(self.n_crf):
-            crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators,
+            crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators_crf,
                                              max_features=1,
                                              n_jobs=-1)
             curr_model, curr_feats, curr_acc = common_utils.get_class_distribution(feats=feats,
@@ -184,7 +185,7 @@ class CascadeLayer:
 
         # train random forests
         for idx_rf in range(self.n_rf):
-            rf_model = RandomForestClassifier(n_estimators=self.n_estimators,
+            rf_model = RandomForestClassifier(n_estimators=self.n_estimators_rf,
                                               n_jobs=-1)
             curr_model, curr_feats, curr_acc = common_utils.get_class_distribution(feats=feats,
                                                                                    labels=labels,
@@ -227,7 +228,7 @@ class CascadeLayer:
 
         for idx_crf in range(self.n_crf):
             print("Training CRF#%d..." % idx_crf)
-            curr_model = ExtraTreesClassifier(n_estimators=self.n_estimators,
+            curr_model = ExtraTreesClassifier(n_estimators=self.n_estimators_crf,
                                               max_features=1,
                                               n_jobs=-1)
             curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
@@ -254,7 +255,7 @@ class CascadeLayer:
 
         for idx_rf in range(self.n_rf):
             print("Training RF#%d..." % idx_rf)
-            curr_model = RandomForestClassifier(n_estimators=self.n_estimators,
+            curr_model = RandomForestClassifier(n_estimators=self.n_estimators_rf,
                                                 n_jobs=-1)
             curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
                                                                                          labels=train_labels,
@@ -283,7 +284,7 @@ class CascadeLayer:
 
         for idx_rsf in range(self.n_rsf):
             print("Training RSF#%d..." % idx_rsf)
-            curr_model = RandomSubspaceForest(n_estimators=self.n_estimators,
+            curr_model = RandomSubspaceForest(n_estimators=self.n_estimators_rsf,
                                               n_features=int(train_feats.shape[1] ** 0.5))
 
             curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
@@ -424,7 +425,7 @@ class EndingLayerStacking:
     def __init__(self, classes_, model=None, k_cv=3):
         self.classes_ = classes_
 
-        self._stacking_model = model if model is not None else LogisticRegression() # RandomForestClassifier(n_estimators=500, n_jobs=-1)
+        self._stacking_model = model if model is not None else LogisticRegression()
         self.k_cv = k_cv
         self._is_fitted = False
 

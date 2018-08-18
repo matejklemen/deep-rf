@@ -148,13 +148,14 @@ class Grain:
                  n_crf=1,
                  n_rsf=0,
                  n_xonf=0,
-                 n_estimators=100,
+                 n_estimators_rf=100,
+                 n_estimators_crf=100,
+                 n_estimators_rsf=100,
                  n_estimators_xonf=100,
                  k_cv=3,
                  classes_=None,
                  random_state=None,
                  labels_encoded=False):
-        # TODO: add n_estimators_... for each model option
         """
         Parameters
         ----------
@@ -172,10 +173,8 @@ class Grain:
                 Number of completely random forests trained on sliced data.
         :param n_rsf: int (default: 0)
                 Number of random subspace forests trained on sliced data.
-        # TODO: add param `n_xonf`
+        # TODO: add param `n_xonf` to docs
         # TODO: add `n_estimators_...` for each model option to docs
-        :param n_estimators: int (default: 100)
-                Number of trees in a single forest.
         :param k_cv: int (default: 3)
                 Parameter for k-fold cross validation.
         :param classes_: list or numpy.ndarray (default: None)
@@ -192,7 +191,9 @@ class Grain:
         self.n_crf, self.crf_estimators = n_crf, []
         self.n_rsf, self.rsf_estimators = n_rsf, []
         self.n_xonf, self.xonf_estimators = n_xonf, []
-        self.n_estimators = n_estimators
+        self.n_estimators_rf = n_estimators_rf
+        self.n_estimators_crf = n_estimators_crf
+        self.n_estimators_rsf = n_estimators_rsf
         self.n_estimators_xonf = n_estimators_xonf
         self.k_cv = k_cv
         self.classes_ = np.array(classes_) if classes_ is not None else None
@@ -265,11 +266,11 @@ class Grain:
         layer_acc = 0.0
 
         for idx_crf in range(self.n_crf):
-            crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators,
+            crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators_crf,
                                              max_features=1,
                                              n_jobs=-1)
 
-            print("Training completely random forest %d with %d estimators..." % (idx_crf + 1, self.n_estimators))
+            print("Training completely random forest %d with %d estimators..." % (idx_crf + 1, self.n_estimators_crf))
             trained_crf, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
                                                                                           labels=labels,
                                                                                           model=crf_model,
@@ -288,10 +289,10 @@ class Grain:
         feats_crf = np.hstack(feats_crf)
 
         for idx_rf in range(self.n_rf):
-            rf_model = RandomForestClassifier(n_estimators=self.n_estimators,
+            rf_model = RandomForestClassifier(n_estimators=self.n_estimators_rf,
                                               n_jobs=-1)
 
-            print("Training random forest %d with %d estimators..." % (idx_rf + 1, self.n_estimators))
+            print("Training random forest %d with %d estimators..." % (idx_rf + 1, self.n_estimators_rf))
             trained_rf, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
                                                                                          labels=labels,
                                                                                          model=rf_model,
@@ -346,7 +347,7 @@ class Grain:
 
         for idx_crf in range(self.n_crf):
             print("Training CRF#%d..." % idx_crf)
-            crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators,
+            crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators_crf,
                                              max_features=1,
                                              min_samples_leaf=10,
                                              max_depth=100,
@@ -379,7 +380,7 @@ class Grain:
 
         for idx_rf in range(self.n_rf):
             print("Training RF#%d..." % idx_rf)
-            rf_model = RandomForestClassifier(n_estimators=self.n_estimators,
+            rf_model = RandomForestClassifier(n_estimators=self.n_estimators_rf,
                                               min_samples_leaf=10,
                                               max_depth=100,
                                               n_jobs=-1)
@@ -415,7 +416,7 @@ class Grain:
 
         for idx_rsf in range(self.n_rsf):
             print("Training RSF#%d..." % idx_rsf)
-            rsf_model = RandomSubspaceForest(n_estimators=self.n_estimators,
+            rsf_model = RandomSubspaceForest(n_estimators=self.n_estimators_rsf,
                                              min_samples_leaf=10,
                                              max_depth=100,
                                              n_features=int(sliced_train.shape[1] ** 0.5))

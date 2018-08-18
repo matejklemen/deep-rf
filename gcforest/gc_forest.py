@@ -17,10 +17,12 @@ class GrainedCascadeForest:
                  end_layer_cascade="avg",
                  window_sizes=None,
                  strides=None,
-                 n_estimators=100,
+                 n_estimators_rf=100,
+                 n_estimators_crf=100,
+                 n_estimators_rsf=100,
                  n_estimators_xonf=100,
                  k_cv=3,
-                 val_size=0.2,
+                 val_size=0.2,  # TODO: remove because this is not being used (using CV instead of validation set)
                  early_stop_iters=1,
                  classes_=None,
                  random_state=None,
@@ -43,7 +45,9 @@ class GrainedCascadeForest:
         self.end_layer_cascade = end_layer_cascade
 
         # general parameters
-        self.n_estimators = n_estimators
+        self.n_estimators_rf = n_estimators_rf
+        self.n_estimators_crf = n_estimators_crf
+        self.n_estimators_rsf = n_estimators_rsf
         self.n_estimators_xonf = n_estimators_xonf
         self.k_cv = k_cv
         self.val_size = val_size
@@ -87,8 +91,10 @@ class GrainedCascadeForest:
                                n_rf=self.n_rf_grain,
                                n_rsf=self.n_rsf_grain,
                                n_xonf=self.n_xonf_grain,
-                               n_estimators=self.n_estimators,
-                               n_estimators_xonf=self.n_estimators_xonf,  # TODO
+                               n_estimators_rf=self.n_estimators_rf,
+                               n_estimators_crf=self.n_estimators_crf,
+                               n_estimators_rsf=self.n_estimators_rsf,
+                               n_estimators_xonf=self.n_estimators_xonf,
                                stride=self.strides[idx_grain],
                                k_cv=self.k_cv,
                                classes_=self.classes_,
@@ -127,7 +133,9 @@ class GrainedCascadeForest:
                                                   n_crf=self.n_crf_cascade,
                                                   n_rsf=self.n_rsf_cascade,
                                                   n_xonf=self.n_xonf_cascade,
-                                                  n_estimators=self.n_estimators,
+                                                  n_estimators_rf=self.n_estimators_rf,
+                                                  n_estimators_crf=self.n_estimators_crf,
+                                                  n_estimators_rsf=self.n_estimators_rsf,
                                                   n_estimators_xonf=self.n_estimators_xonf,
                                                   k_cv=self.k_cv,
                                                   classes_=self.classes_,
@@ -173,7 +181,9 @@ class GrainedCascadeForest:
                                                      n_crf=self.n_crf_cascade,
                                                      n_rsf=self.n_rsf_cascade,
                                                      n_xonf=self.n_xonf_cascade,
-                                                     n_estimators=self.n_estimators,
+                                                     n_estimators_rf=self.n_estimators_rf,
+                                                     n_estimators_crf=self.n_estimators_crf,
+                                                     n_estimators_rsf=self.n_estimators_rsf,
                                                      n_estimators_xonf=self.n_estimators_xonf,
                                                      k_cv=self.k_cv,
                                                      classes_=self.classes_,
@@ -230,7 +240,9 @@ class GrainedCascadeForest:
                                       n_crf=self.n_crf_cascade,
                                       n_rsf=self.n_rsf_cascade,
                                       n_xonf=self.n_xonf_cascade,
-                                      n_estimators=self.n_estimators,
+                                      n_estimators_rf=self.n_estimators_rf,
+                                      n_estimators_crf=self.n_estimators_crf,
+                                      n_estimators_rsf=self.n_estimators_rsf,
                                       n_estimators_xonf=self.n_estimators_xonf,
                                       k_cv=self.k_cv,
                                       classes_=self.classes_,
