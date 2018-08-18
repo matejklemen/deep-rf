@@ -1,7 +1,7 @@
 import numpy as np
 
-from mg_scanning import Grain, MultiGrainedScanning
-from cascade_forest import CascadeLayer, CascadeForest, EndingLayerAverage, EndingLayerStacking
+from gcforest.mg_scanning import Grain, MultiGrainedScanning
+from gcforest.cascade_forest import CascadeLayer, CascadeForest, EndingLayerAverage, EndingLayerStacking
 
 
 class GrainedCascadeForest:
