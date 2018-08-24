@@ -440,7 +440,7 @@ class EndingLayerStacking:
         return proba_preds
 
     def predict(self, feats):
-        return np.argmax(self.predict_proba(feats), axis=1)
+        return self.classes_[np.argmax(self.predict_proba(feats), axis=1)]
 
     def fit(self, feats, labels):
         self._is_fitted = False
