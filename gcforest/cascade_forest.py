@@ -285,7 +285,8 @@ class CascadeLayer:
         for idx_rsf in range(self.n_rsf):
             print("Training RSF#%d..." % idx_rsf)
             curr_model = RandomSubspaceForest(n_estimators=self.n_estimators_rsf,
-                                              n_features=int(train_feats.shape[1] ** 0.5))
+                                              n_features="sqrt",
+                                              n_jobs=-1)
 
             curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
                                                                                          labels=train_labels,

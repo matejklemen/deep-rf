@@ -419,7 +419,8 @@ class Grain:
             rsf_model = RandomSubspaceForest(n_estimators=self.n_estimators_rsf,
                                              min_samples_leaf=10,
                                              max_depth=100,
-                                             n_features=int(sliced_train.shape[1] ** 0.5))
+                                             n_features="sqrt",
+                                             n_jobs=-1)
 
             # fit
             rsf_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=sliced_train,
