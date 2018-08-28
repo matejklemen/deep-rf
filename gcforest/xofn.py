@@ -1,4 +1,8 @@
 import numpy as np
+import multiprocessing
+
+from sklearn.model_selection import KFold
+from itertools import chain
 
 
 class XOfNAttribute(object):
@@ -797,12 +801,28 @@ class XOfNTree(object):
             return self._single_pred_proba(single_example, curr_node.rch)
 
 
+# data for parallel fitting of random X-of-N forests
+# READ-ONLY! (write only in main process)
+_shared_data_xofn = {}
+
+
+def _set_shared_data(feats, labels, shape):
+    _shared_data_xofn["feats"] = feats
+    _shared_data_xofn["labels"] = labels
+    _shared_data_xofn["shape"] = shape
+
+
+def _clear_shared_data():
+    _shared_data_xofn.clear()
+
+
 class RandomXOfNForest(object):
     def __init__(self, n_estimators=100,
                  min_samples_leaf=1,
                  max_features="sqrt",
                  sample_size=None,
                  max_depth=None,
+                 n_jobs=1,
                  random_state=None,
                  labels_encoded=False,
                  classes_=None):
@@ -811,6 +831,7 @@ class RandomXOfNForest(object):
         self.max_features = max_features
         self.sample_size = sample_size
         self.max_depth = max_depth
+        self.n_jobs = max(1, n_jobs) if n_jobs != -1 else multiprocessing.cpu_count()
         if random_state is not None:
             np.random.seed(random_state)
         self.labels_encoded = labels_encoded
@@ -835,6 +856,28 @@ class RandomXOfNForest(object):
         self.classes_, enc_labels = np.unique(labels, return_inverse=True)
         return enc_labels
 
+    def _fit_process(self, n_trees, rand_seed):
+        np.random.seed(rand_seed)
+        shape = _shared_data_xofn["shape"]
+
+        feats = np.frombuffer(_shared_data_xofn["feats"], np.float32).reshape(shape)
+        labels = np.frombuffer(_shared_data_xofn["labels"], np.int32)
+        n_samples = feats.shape[0]
+        trees = []
+
+        for i in range(n_trees):
+            sample_idx = np.random.choice(n_samples, size=self._sample_size, replace=True)
+            xofn_tree = XOfNTree(min_samples_leaf=self.min_samples_leaf,
+                                 max_features=self.max_features,
+                                 max_depth=self.max_depth,
+                                 labels_encoded=True,
+                                 classes_=self.classes_)
+
+            xofn_tree.fit(feats[sample_idx, :], labels[sample_idx])
+            trees.append(xofn_tree)
+
+        return trees
+
     def fit(self, train_feats, train_labels):
         self._is_fitted = False
         self.estimators = []
@@ -847,20 +890,34 @@ class RandomXOfNForest(object):
 
         n_samples = train_feats.shape[0]
         self._sample_size = RandomXOfNForest.calc_sample_size(self.sample_size, n_samples)
-        # print("Using bootstrap sample of size %d..." % self._sample_size)
 
-        for i in range(self.n_estimators):
-            # print("Training tree #%d" % i)
-            sample_idx = np.random.choice(n_samples, size=self._sample_size, replace=True)
-            curr_estimator = XOfNTree(min_samples_leaf=self.min_samples_leaf,
-                                      max_features=self.max_features,
-                                      max_depth=self.max_depth,
-                                      labels_encoded=True,
-                                      classes_=self.classes_)
-            curr_estimator.fit(train_feats[sample_idx, :], train_labels[sample_idx])
+        # put features and labels into shared data
+        feats_shape = train_feats.shape
+        feats_base = multiprocessing.Array("f", feats_shape[0] * feats_shape[1], lock=False)
+        feats_np = np.frombuffer(feats_base, dtype=np.float32).reshape(feats_shape)
+        np.copyto(feats_np, train_feats)
 
-            self.estimators.append(curr_estimator)
+        labels_base = multiprocessing.Array("I", feats_shape[0], lock=False)
+        labels_np = np.frombuffer(labels_base, dtype=np.int32)
+        np.copyto(labels_np, train_labels)
 
+        with multiprocessing.Pool(processes=self.n_jobs,
+                                  initializer=_set_shared_data,
+                                  initargs=(feats_base, labels_base, feats_shape)) as pool:
+            async_objs = []
+            for idx_proc in range(self.n_jobs):
+                # divide `n_estimators` between `n_jobs` processes -
+                # the int() rounding of floats makes sure that work gets split as evenly as possible
+                start = int(float(idx_proc) * self.n_estimators / self.n_jobs)
+                end = int(float(idx_proc + 1) * self.n_estimators / self.n_jobs)
+
+                async_objs.append(pool.apply_async(func=self._fit_process,
+                                                   args=(end - start, np.random.randint(2**30))))
+
+            res = [obj.get() for obj in async_objs]
+            self.estimators = list(chain(*[ests for ests in res]))
+
+        _clear_shared_data()
         self._is_fitted = True
 
     def predict_proba(self, test_feats):
