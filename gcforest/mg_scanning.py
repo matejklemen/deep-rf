@@ -455,7 +455,8 @@ class Grain:
             print("Training XoNF#%d..." % idx_xonf)
             xonf_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf,
                                           min_samples_leaf=10,
-                                          max_depth=100)
+                                          max_depth=100,
+                                          n_jobs=-1)
 
             # fit
             xonf_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=sliced_train,

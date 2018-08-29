@@ -316,7 +316,8 @@ class CascadeLayer:
         for idx_xonf in range(self.n_xonf):
             print("Training XoNF#%d..." % idx_xonf)
             # TODO: `sample_size`, `max_features` parameters (maybe)
-            curr_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf)
+            curr_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf,
+                                          n_jobs=-1)
             curr_model, curr_train_feats, curr_acc = common_utils.get_class_distribution(feats=train_feats,
                                                                                          labels=train_labels,
                                                                                          model=curr_model,
