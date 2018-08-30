@@ -223,7 +223,7 @@ def _res_gini_numerical(feat, target, sorted_thresholds=None):
     sort_indices = np.argsort(feat)
     sorted_feat, sorted_target = feat[sort_indices], target[sort_indices]
 
-    idx_thresh, idx_example = 0, 0
+    idx_thresh, idx_example = 1, 0
     num_examples = sorted_feat.shape[0]
     best_gini, idx_best_thresh = 1, 0
 
