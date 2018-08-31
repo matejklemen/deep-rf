@@ -252,6 +252,10 @@ class Grain:
         return features[:, all_winds_single_example].flatten().reshape([-1, self.wind_size[0] * self.wind_size[1]])
 
     def create(self, features, labels):
+        # -----------------------------------------------------------------------------------------------
+        # NOTE: preferably use fit_transform(...) instead (more thoroughly tested and less memory hungry)
+        # -----------------------------------------------------------------------------------------------
+        # TODO (low priority): refactor
         sliced_data = self.slice_data(features)
         print("Successfully sliced data for window size %s and stride %s ----> shape of slices: %s..." %
               (str(self.wind_size), str(self.stride), str(sliced_data.shape)))
@@ -260,68 +264,118 @@ class Grain:
         multiply_factor = int(sliced_data.shape[0] / features.shape[0])
         labels = np.tile(np.reshape(labels, [-1, 1]), (1, multiply_factor)).flatten()
 
-        # TODO: add `feats_rsf`, `feats_xonf`
-        feats_crf, feats_rf = [], []
-
+        feats_crf, feats_rf, feats_rsf, feats_xonf = [], [], [], []
+        all_train = None
         layer_acc = 0.0
 
         for idx_crf in range(self.n_crf):
             crf_model = ExtraTreesClassifier(n_estimators=self.n_estimators_crf,
                                              max_features=1,
+                                             min_samples_leaf=10,
+                                             max_depth=100,
                                              n_jobs=-1)
 
-            print("Training completely random forest %d with %d estimators..." % (idx_crf + 1, self.n_estimators_crf))
-            trained_crf, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
-                                                                                          labels=labels,
-                                                                                          model=crf_model,
-                                                                                          num_all_classes=
-                                                                                          self.classes_.shape[0],
-                                                                                          k_cv=self.k_cv)
+            print("Training CRF#%d..." % idx_crf)
+            crf_model, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
+                                                                                        labels=labels,
+                                                                                        model=crf_model,
+                                                                                        num_all_classes=
+                                                                                        self.classes_.shape[0],
+                                                                                        k_cv=self.k_cv)
 
             layer_acc += curr_acc
 
             # combine predictions for slices of same example together
             feats_crf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
             # save trained model
-            self.crf_estimators.append(trained_crf)
+            self.crf_estimators.append(crf_model)
 
-        # TODO: account for `self.n_crf` being 0
-        feats_crf = np.hstack(feats_crf)
+        if self.n_crf > 0:
+            feats_crf = np.hstack(feats_crf)
+            all_train = feats_crf
 
         for idx_rf in range(self.n_rf):
             rf_model = RandomForestClassifier(n_estimators=self.n_estimators_rf,
+                                              min_samples_leaf=10,
+                                              max_depth=100,
                                               n_jobs=-1)
 
-            print("Training random forest %d with %d estimators..." % (idx_rf + 1, self.n_estimators_rf))
-            trained_rf, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
-                                                                                         labels=labels,
-                                                                                         model=rf_model,
-                                                                                         num_all_classes=
-                                                                                         self.classes_.shape[0],
-                                                                                         k_cv=self.k_cv)
+            print("Training RF#%d..." % idx_rf)
+            rf_model, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
+                                                                                       labels=labels,
+                                                                                       model=rf_model,
+                                                                                       num_all_classes=
+                                                                                       self.classes_.shape[0],
+                                                                                       k_cv=self.k_cv)
 
             layer_acc += curr_acc
 
             # combine predictions for slices of same example together
             feats_rf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
             # save trained model
-            self.rf_estimators.append(trained_rf)
+            self.rf_estimators.append(rf_model)
 
-        # TODO: account for `self.n_rf` being 0
-        feats_rf = np.hstack(feats_rf)
+        if self.n_rf > 0:
+            feats_rf = np.hstack(feats_rf)
+            all_train = feats_rf if all_train is None else np.hstack((all_train, feats_rf))
 
-        # TODO: train random subspace forests
-        # ...
+        for idx_rsf in range(self.n_rsf):
+            rsf_model = RandomSubspaceForest(n_estimators=self.n_estimators_rsf,
+                                             min_samples_leaf=10,
+                                             max_depth=100,
+                                             n_features="sqrt",
+                                             n_jobs=-1)
 
-        # TODO: train random X-of-N forests
-        # ...
+            print("Training RSF#%d..." % idx_rsf)
+            rsf_model, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
+                                                                                        labels=labels,
+                                                                                        model=rsf_model,
+                                                                                        num_all_classes=
+                                                                                        self.classes_.shape[0],
+                                                                                        k_cv=self.k_cv)
 
-        # TODO: divide by (self.n_rf + self.n_crf + self.n_rsf + self.n_xonf)
-        layer_acc /= (self.n_rf + self.n_crf)
+            layer_acc += curr_acc
+            # combine predictions for slices of same example together
+            feats_rsf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
+            # save trained model
+            self.rsf_estimators.append(rsf_model)
+
+        if self.n_rsf > 0:
+            feats_rsf = np.hstack(feats_rsf)
+            all_train = feats_rsf if all_train is None else np.hstack((all_train, feats_rsf))
+
+        for idx_xonf in range(self.n_xonf):
+            xonf_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf,
+                                          min_samples_leaf=10,
+                                          max_depth=100,
+                                          n_jobs=-1)
+
+            print("Training XoNF#%d..." % idx_xonf)
+            xonf_model, curr_proba_preds, curr_acc = common_utils.get_class_distribution(feats=sliced_data,
+                                                                                         labels=labels,
+                                                                                         model=xonf_model,
+                                                                                         num_all_classes=
+                                                                                         self.classes_.shape[0],
+                                                                                         k_cv=self.k_cv)
+
+            layer_acc += curr_acc
+            # combine predictions for slices of same example together
+            feats_xonf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
+            # save trained model
+            self.xonf_estimators.append(xonf_model)
+
+        if self.n_xonf > 0:
+            feats_xonf = np.hstack(feats_xonf)
+            all_train = feats_xonf if all_train is None else np.hstack((all_train, feats_xonf))
+
+        if all_train is None:
+            raise Exception("No models were specified for this Grain!")
+
+        layer_acc /= (self.n_rf + self.n_crf + self.n_rsf + self.n_xonf)
         self.kfold_acc = layer_acc
         print("Average LAYER accuracy is %f..." % self.kfold_acc)
 
-        return np.hstack((feats_crf, feats_rf))
+        return all_train
 
     def fit_transform(self, train_feats, train_labels, test_feats):
         sliced_train = self.slice_data(train_feats)
@@ -498,11 +552,15 @@ class Grain:
         return all_train, all_test
 
     def transform(self, features):
+        # -----------------------------------------------------------------------------------------------
+        # NOTE: preferably use fit_transform(...) instead (more thoroughly tested and less memory hungry)
+        # -----------------------------------------------------------------------------------------------
+        # TODO (low priority): refactor
         sliced_data = self.slice_data(features)
 
         multiply_factor = int(sliced_data.shape[0] / features.shape[0])
-        # TODO: add `feats_rsf`, `feats_xonf`
-        feats_crf, feats_rf = [], []
+        feats_crf, feats_rf, feats_rsf, feats_xonf = [], [], [], []
+        all_test = None
 
         for idx_crf in range(self.n_crf):
             curr_proba_preds = np.zeros((sliced_data.shape[0], self.classes_.shape[0]))
@@ -512,8 +570,9 @@ class Grain:
             # combine predictions for slices of same example together
             feats_crf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
 
-        # TODO: account for `self.n_crf` being 0
-        feats_crf = np.hstack(feats_crf)
+        if self.n_crf > 0:
+            feats_crf = np.hstack(feats_crf)
+            all_test = feats_crf
 
         for idx_rf in range(self.n_rf):
             curr_proba_preds = np.zeros((sliced_data.shape[0], self.classes_.shape[0]))
@@ -523,13 +582,35 @@ class Grain:
             # combine predictions for slices of same example together
             feats_rf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
 
-        # TODO: account for `self.n_rf` being 0
-        feats_rf = np.hstack(feats_rf)
+        if self.n_rf > 0:
+            feats_rf = np.hstack(feats_rf)
+            all_test = feats_rf if all_test is None else np.hstack((all_test, feats_rf))
 
-        # TODO: transform data with random subspace forests
-        # ...
+        for idx_rsf in range(self.n_rsf):
+            curr_proba_preds = np.zeros((sliced_data.shape[0], self.classes_.shape[0]))
+            class_indices = self.crf_estimators[idx_rsf].classes_
+            curr_proba_preds[:, class_indices] = self.crf_estimators[idx_rsf].predict_proba(sliced_data)
 
-        # TODO: transform data with random X-of-N forests
-        # ...
+            # combine predictions for slices of same example together
+            feats_rsf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
 
-        return np.hstack((feats_crf, feats_rf))
+        if self.n_rsf > 0:
+            feats_rsf = np.hstack(feats_rsf)
+            all_test = feats_rsf if all_test is None else np.hstack((all_test, feats_rsf))
+
+        for idx_xonf in range(self.n_xonf):
+            curr_proba_preds = np.zeros((sliced_data.shape[0], self.classes_.shape[0]))
+            class_indices = self.xonf_estimators[idx_xonf].classes_
+            curr_proba_preds[:, class_indices] = self.xonf_estimators[idx_xonf].predict_proba(sliced_data)
+
+            # combine predictions for slices of same example together
+            feats_xonf.append(curr_proba_preds.reshape([-1, multiply_factor * self.classes_.shape[0]]))
+
+        if self.n_xonf > 0:
+            feats_xonf = np.hstack(feats_xonf)
+            all_test = feats_xonf if all_test is None else np.hstack((all_test, feats_xonf))
+
+        if all_test is None:
+            raise Exception("No models were specified for this Grain!")
+
+        return all_test
