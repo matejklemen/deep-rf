@@ -5,6 +5,94 @@ from gcforest.cascade_forest import CascadeLayer, CascadeForest, EndingLayerAver
 
 
 class GrainedCascadeForest:
+    """
+    Parameters
+    ----------
+    single_shape: int or list or tuple or np.array
+        Dimensions of a single example. If int, shape is converted to [1, `single_shape`]. If list or tuple or
+        np.array, shape is taken as their value. Necessary as a parameter because examples in training set should
+        be unrolled 1D examples, which don't carry information about the shape of single example. **Only required when
+        using multi-grained scanning**.
+
+    n_rf_grain: int, optional
+        Number of random forest models inside a single grain.
+
+    n_crf_grain: int, optional
+        Number of completely random forest models inside a single grain.
+
+    n_rsf_grain: int, optional
+        Number of random subspace forest models inside a single grain.
+
+    n_xonf_grain: int, optional
+        Number of random X-of-N forest models inside a single grain.
+
+    n_rf_cascade: int, optional
+        Number of random forest models inside a single layer of cascade forest.
+
+    n_crf_cascade: int, optional
+        Number of completely random forest models inside a single layer of cascade forest.
+
+    n_rsf_cascade: int, optional
+        Number of random subspace forest models inside a single layer of cascade forest.
+
+    n_xonf_cascade: int, optional
+        Number of random X-of-N forest models inside a single layer of cascade forest.
+
+    end_layer_cascade: str, optional
+        Type of combination function to convert predicted probabilities of last layer of cascade forest into
+        actual predictions. Default setting is "avg" (simple averaging), the other currently available option is
+        "stack" (use stacking to combine predictions).
+
+    window_sizes: list or list of lists or list of tuples, optional
+        Sliding window sizes to be used in multi-grained scanning. Will be applied in same order as specified.
+        If list, single window size will be used (with dimensions `window_sizes[0]` x `window_sizes[1]`). If list
+        of lists or list of tuples, each member defines new sliding window size. **Only required when using
+        multi-grained scanning**.
+
+    strides: list or list of lists or list of tuples, optional
+        Strides to be used with sliding window sizes, specified by `window_sizes`. Will be applied in same order as
+        specified. Stride at index `i` will be applied together with window size at index `i`. **Only required when
+        using multi-grained scanning**.
+
+    n_estimators_rf: int, optional
+        Number of trees to be used in a single random forest model.
+
+    n_estimators_crf: int, optional
+        Number of trees to be used in a single completely random forest model.
+
+    n_estimators_rsf: int, optional
+        Number of trees to be used in a single random subspace forest model.
+
+    n_estimators_xonf: int, optional
+        Number of trees to be used in a single random X-of-N forest model.
+
+    k_cv: int, optional
+        Number of groups, used in k-fold cross validation.
+
+    early_stop_iters: int, optional
+        Maximum number of allowed consecutive iterations of building cascade forest layers without increasing accuracy.
+        Used as regularization, but can also be a way to break out of local optima (e.g. accuracy decreases for one
+        iteration, then starts to increase again).
+
+    classes_: list or np.array, optional
+        Mapping of classes to indices in probability prediction vectors. Example value of `classes_` with 4 classes
+        (C0, C1, C2 and C3), where probability for C0 should be at index 1, C1 at index 0, C2 at index 2 and
+        probability for C3 at index 3:
+
+        >>> np.array(["C1", "C0", "C2", "C3"])
+
+    random_state: int, optional
+        Random state for random number generator. If None, do not seed the generator.
+
+    labels_encoded: bool, optional
+        Specifies whether labels provided to `fit(...)` (or similar methods) are already encoded as specified by
+        `classes_`. **Should not be set to True without providing `classes_`**.
+
+    Notes
+    -----
+        Parameters `classes_` and `labels_encoded` will probably be removed from class parameters in the future as
+        they bring unnecessary complexity.
+    """
     def __init__(self, single_shape=None,
                  n_rf_grain=1,
                  n_crf_grain=1,
@@ -22,7 +110,6 @@ class GrainedCascadeForest:
                  n_estimators_rsf=100,
                  n_estimators_xonf=100,
                  k_cv=3,
-                 val_size=0.2,  # TODO: remove because this is not being used (using CV instead of validation set)
                  early_stop_iters=1,
                  classes_=None,
                  random_state=None,
@@ -50,14 +137,13 @@ class GrainedCascadeForest:
         self.n_estimators_rsf = n_estimators_rsf
         self.n_estimators_xonf = n_estimators_xonf
         self.k_cv = k_cv
-        self.val_size = val_size
         self.early_stop_iters = early_stop_iters
         self.classes_ = classes_
         if random_state is not None:
             np.random.seed(random_state)
         self.labels_encoded = labels_encoded
 
-        # TODO: add parameters
+        # TODO: implement caching and general saving to disk
         self.cache_dir = "tmp/"
 
         # miscellaneous
@@ -78,6 +164,9 @@ class GrainedCascadeForest:
 
     def _prepare_grains(self):
         # TODO: check if 'window_sizes' and 'strides' is a list/numpy.ndarray/int/tuple
+        # ...
+
+        # TODO: if `window_sizes` and `strides` both contain multiple sizes, they should be of same length
         # ...
 
         self._grains = []
