@@ -175,6 +175,7 @@ class Grain:
                 Number of random subspace forests trained on sliced data.
         # TODO: add param `n_xonf` to docs
         # TODO: add `n_estimators_...` for each model option to docs
+        # TODO: add sample size for X-of-N forests as a parameter
         :param k_cv: int (default: 3)
                 Parameter for k-fold cross validation.
         :param classes_: list or numpy.ndarray (default: None)
@@ -205,8 +206,8 @@ class Grain:
 
     @staticmethod
     def _process(shape_el):
-        # convert scalar window sizes to np.ndarrays to be able to make slicing method more general
         if isinstance(shape_el, int):
+            # convert scalar window sizes to np.ndarrays to be able to make slicing method more general
             wind_size = np.array([1, shape_el])
         elif isinstance(shape_el, tuple):
             wind_size = np.array([*shape_el])
@@ -348,6 +349,7 @@ class Grain:
             xonf_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf,
                                           min_samples_leaf=10,
                                           max_depth=100,
+                                          sample_size=0.05,
                                           n_jobs=-1)
 
             print("Training XoNF#%d..." % idx_xonf)
@@ -510,6 +512,7 @@ class Grain:
             xonf_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf,
                                           min_samples_leaf=10,
                                           max_depth=100,
+                                          sample_size=0.05,
                                           n_jobs=-1)
 
             # fit
