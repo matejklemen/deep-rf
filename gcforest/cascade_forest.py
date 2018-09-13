@@ -402,42 +402,54 @@ class CascadeLayer:
             raise Exception("Models were not saved during training. Argument 'keep_models' should be set to True "
                             "when creating a CascadeLayer...")
 
-        feats_crf, feats_rf = [], []
+        feats_crf, feats_rf, feats_rsf, feats_xonf = [], [], [], []
+        all_test = None
 
-        for idx_model in range(self.n_crf):
+        for idx_crf in range(self.n_crf):
             curr_proba_preds = np.zeros((feats.shape[0], self.classes_.shape[0]))
-            class_indices = self.crf_estimators[idx_model].classes_
-            curr_proba_preds[:, class_indices] = self.crf_estimators[idx_model].predict_proba(feats)
+            class_indices = self.crf_estimators[idx_crf].classes_
+            curr_proba_preds[:, class_indices] = self.crf_estimators[idx_crf].predict_proba(feats)
 
             feats_crf.append(curr_proba_preds)
 
-        # TODO: account for `self.n_crf` being 0
-        feats_crf = np.hstack(feats_crf)
+        if self.n_crf > 0:
+            feats_crf = np.hstack(feats_crf)
+            all_test = feats_crf
 
-        for idx_model in range(self.n_rf):
+        for idx_rf in range(self.n_rf):
             curr_proba_preds = np.zeros((feats.shape[0], self.classes_.shape[0]))
-            class_indices = self.rf_estimators[idx_model].classes_
-            curr_proba_preds[:, class_indices] = self.rf_estimators[idx_model].predict_proba(feats)
+            class_indices = self.rf_estimators[idx_rf].classes_
+            curr_proba_preds[:, class_indices] = self.rf_estimators[idx_rf].predict_proba(feats)
 
             feats_rf.append(curr_proba_preds)
 
-        # TODO: account for `self.n_rf` being 0
-        feats_rf = np.hstack(feats_rf)
+        if self.n_rf > 0:
+            feats_rf = np.hstack(feats_rf)
+            all_test = feats_rf if all_test is None else np.hstack((all_test, feats_rf))
 
-        # TODO: transform data with random subspace forests
-        # ...
+        for idx_rsf in range(self.n_rsf):
+            curr_proba_preds = np.zeros((feats.shape[0], self.classes_.shape[0]))
+            class_indices = self.rsf_estimators[idx_rsf].classes_
+            curr_proba_preds[:, class_indices] = self.rsf_estimators[idx_rsf].predict_proba(feats)
 
-        # TODO: account for `self.n_rsf` being 0
-        # ...
+            feats_rsf.append(curr_proba_preds)
 
-        # TODO: transform data with random X-of-N forests
-        # ...
+        if self.n_rsf > 0:
+            feats_rsf = np.hstack(feats_rsf)
+            all_test = feats_rsf if all_test is None else np.hstack((all_test, feats_rsf))
 
-        # TODO: account for `self.n_xonf` being 0
-        # ...
+        for idx_xonf in range(self.n_xonf):
+            curr_proba_preds = np.zeros((feats.shape[0], self.classes_.shape[0]))
+            class_indices = self.xonf_estimators[idx_xonf].classes_
+            curr_proba_preds[:, class_indices] = self.xonf_estimators[idx_xonf].predict_proba(feats)
 
-        # TODO: hstack `feats_crf`, `feats_rf`, `feats_rsf`, `feats_xonf`
-        return np.hstack((feats_crf, feats_rf))
+            feats_xonf.append(curr_proba_preds)
+
+        if self.n_xonf > 0:
+            feats_xonf = np.hstack(feats_xonf)
+            all_test = feats_xonf if all_test is None else np.hstack((all_test, feats_xonf))
+
+        return all_test
 
 
 class EndingLayerAverage:
