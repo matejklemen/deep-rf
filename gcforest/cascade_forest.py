@@ -157,9 +157,12 @@ class CascadeLayer:
             This method is currently not the main focus because caching is not yet implemented - `fit_transform(...)`
             is therefore better suited, as it does not keep/save models in memory and does fitting and predicting
             "simultaneously".
+
+            tl;dr: use fit_transform(...) instead at the moment.
         """
-        # TODO: add `feats_rsf`, `feats_xonf`
-        feats_crf, feats_rf = [], []
+
+        feats_crf, feats_rf, feats_rsf, feats_xonf = [], [], [], []
+        all_train = None
 
         layer_acc = 0.0
 
@@ -180,8 +183,9 @@ class CascadeLayer:
                 self.crf_estimators.append(curr_model)
             feats_crf.append(curr_feats)
 
-        # TODO: account for `self.n_crf` being 0
-        feats_crf = np.hstack(feats_crf)
+        if self.n_crf > 0:
+            feats_crf = np.hstack(feats_crf)
+            all_train = feats_crf
 
         # train random forests
         for idx_rf in range(self.n_rf):
@@ -199,22 +203,60 @@ class CascadeLayer:
                 self.rf_estimators.append(curr_model)
             feats_rf.append(curr_feats)
 
-        # TODO: account for `self.n_rf` being 0
-        feats_rf = np.hstack(feats_rf)
+        if self.n_rf > 0:
+            feats_rf = np.hstack(feats_rf)
+            all_train = feats_rf if all_train is None else np.hstack((all_train, feats_rf))
 
-        # TODO: train random subspace forests
-        # ...
+        # train random subspace forests
+        for idx_rsf in range(self.n_rsf):
+            rsf_model = RandomSubspaceForest(n_estimators=self.n_estimators_rsf,
+                                             n_features="sqrt",
+                                             n_jobs=-1)
+            curr_model, curr_feats, curr_acc = common_utils.get_class_distribution(feats=feats,
+                                                                                   labels=labels,
+                                                                                   model=rsf_model,
+                                                                                   num_all_classes=
+                                                                                   self.classes_.shape[0],
+                                                                                   k_cv=self.k_cv)
 
-        # TODO: train random X-of-N forests
-        # ...
+            layer_acc += curr_acc
 
-        # TODO: divide by (n_rf + n_crf + n_rsf + n_xonf)
-        layer_acc /= (self.n_rf + self.n_crf)
+            if self.keep_models:
+                self.rsf_estimators.append(rsf_model)
+            feats_rsf.append(curr_feats)
+
+        if self.n_rsf > 0:
+            feats_rsf = np.hstack(feats_rsf)
+            all_train = feats_rsf if all_train is None else np.hstack((all_train, feats_rsf))
+
+        # train random X-of-N forests
+        for idx_xonf in range(self.n_xonf):
+            xonf_model = RandomXOfNForest(n_estimators=self.n_estimators_xonf,
+                                          sample_size=0.05,
+                                          n_jobs=-1)
+
+            curr_model, curr_feats, curr_acc = common_utils.get_class_distribution(feats=feats,
+                                                                                   labels=labels,
+                                                                                   model=xonf_model,
+                                                                                   num_all_classes=
+                                                                                   self.classes_.shape[0],
+                                                                                   k_cv=self.k_cv)
+
+            layer_acc += curr_acc
+
+            if self.keep_models:
+                self.xonf_estimators.append(xonf_model)
+            feats_xonf.append(curr_feats)
+
+        if self.n_xonf > 0:
+            feats_xonf = np.hstack(feats_xonf)
+            all_train = feats_xonf if all_train is None else np.hstack((all_train, feats_xonf))
+
+        layer_acc /= (self.n_rf + self.n_crf + self.n_rsf + self.n_xonf)
         self.kfold_acc = layer_acc
         print("Average LAYER accuracy is %f..." % self.kfold_acc)
 
-        # TODO: stack feats_crf, feats_rf, feats_rsf, feats_xonf (be careful to be consistent with other methods)
-        return np.hstack((feats_crf, feats_rf))
+        return all_train
 
     def fit_transform(self, train_feats, train_labels, test_feats):
         train_feats_crf, train_feats_rf = [], []
