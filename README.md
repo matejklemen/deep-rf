@@ -66,7 +66,8 @@ The `examples/` folder contains two more examples of using this implementation.
 
 ## Project structure
 - `gcforest/` map contains the logic of the implementation,
-- `data/` map contains a few data sets that were used to test this implementation.
+- `data/` map contains a few data sets that were used to test this implementation,
+- `examples/` map contains a few examples on how to use the implementation.
 
 
 ## References
