@@ -35,8 +35,9 @@ $ python setup.py install
 The following example builds a deep forest that consists only of cascade forest (no
 multi-grained scanning). Each layer contains 4 random, 4 completely random and 4 random
 subspace forests. Each of these forests contains 500 trees. Anywhere k-fold
-cross-validation is used in the deep forest algorithm, k = 3. The example uses LETTER
-data set for fitting and predicting.
+cross-validation is used in the deep forest algorithm, k = 3. The predictions of models
+in last layer are combined using stacking. The example uses LETTER data set for fitting
+and predicting.
 
 ```python
 import numpy as np
@@ -50,6 +51,7 @@ gcf = GrainedCascadeForest(n_rf_cascade=4,
                            n_estimators_rf=500,
                            n_estimators_crf=500,
                            n_estimators_rsf=500,
+                           end_layer_cascade="stack",
                            k_cv=3)
 
 # fit_predict(...) does 'simultaneous' fitting and predicting, i.e. trains a part of forest
