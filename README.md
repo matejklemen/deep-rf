@@ -31,6 +31,13 @@ Then run *setup.py*.
 $ python setup.py install
 ```
 
+## Tests
+
+Run the tests from root of project:
+```
+$ python -m unittest
+```
+
 ## Examples
 The following example builds a deep forest that consists only of cascade forest (no
 multi-grained scanning). Each layer contains 4 random, 4 completely random and 4 random
@@ -69,18 +76,19 @@ The `examples/` folder contains two more examples of using this implementation.
 ## Project structure
 - `gcforest/` map contains the logic of the implementation,
 - `data/` map contains a few data sets that were used to test this implementation,
-- `examples/` map contains a few examples on how to use the implementation.
+- `examples/` map contains a few examples on how to use the implementation,
+- `tests/` map constains tests (WIP).
 
 
 ## References
 \[1\] Zhou, Z. H., and Feng, J. (2017).
 Deep forest: Towards an alternative to deep neural networks.
-In IJCAI-2017.</a>  
+In IJCAI-2017. 
 
 \[2\] Ho, T. K. (1998). 
 The random subspace method for constructing decision forests.
-IEEE Transactions on Pattern Analysis and Machine Intelligence, 20(8), 832-844. </a>  
+IEEE Transactions on Pattern Analysis and Machine Intelligence, 20(8), 832-844.
 
 \[3\] Zheng, Z. (2000).
 Constructing X-of-N attributes for decision tree learning.
-Machine learning, 40(1), 35-75. </a>
+Machine learning, 40(1), 35-75.
