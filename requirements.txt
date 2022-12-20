@@ -1,3 +1,6 @@
 # Note: might work with versions, prior to these (these were used when developing this implementation)
 numpy  # developed with 1.14.3
 scikit-learn  # developed with 0.19.1
+
+#added later
+joblib # added since job-lib was removed from scikit-learn.externals
