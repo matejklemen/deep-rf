@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.model_selection import KFold, StratifiedKFold
-from sklearn.externals import joblib
+from joblib
 import os
 import shutil
 
